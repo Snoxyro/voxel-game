@@ -279,6 +279,15 @@ learned. Includes honest notes on AI assistance — what worked, what didn't.
 - Stone is not visible from above yet — need to walk to the edge to see the layering.
   Caves or overhangs in a later phase will expose it from above.
 
+### Addendum — fBm Terrain Upgrade
+- Replaced single-octave noise with 4-octave fractional Brownian motion (fBm)
+- Configurable constants: OCTAVES, BASE_FREQUENCY, LACUNARITY, PERSISTENCE
+- Per-octave seed offset (seed + i * 31337L) prevents harmonic interference at origin
+- BASE_HEIGHT raised to 8, HEIGHT_VARIATION raised to 24
+- Chunk grid expanded from 4×4 to 8×8 for visible terrain variation
+- MOVEMENT_SPEED raised from 0.05 to 0.15 (3× increase)
+- Observation: BASE_FREQUENCY is the most impactful tuning knob for terrain character
+
 ---
 
 <!-- 

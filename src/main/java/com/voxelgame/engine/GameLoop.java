@@ -21,7 +21,7 @@ public class GameLoop {
     private ShaderProgram shaderProgram;
     private World world;
 
-    private static final float MOVEMENT_SPEED = 0.05f;
+    private static final float MOVEMENT_SPEED = 0.15f;
     private static final float MOUSE_SENSITIVITY = 0.1f;
     
     /**
@@ -51,7 +51,7 @@ public class GameLoop {
         GL11.glEnable(GL11.GL_CULL_FACE);
 
         camera = new Camera(1280,720);
-        camera.getPosition().set(32.0f, 20.0f, 48.0f);
+        camera.getPosition().set(64.0f, 30.0f, 96.0f);
         inputHandler = new InputHandler(window.getWindowHandle());
         inputHandler.init();
 
@@ -59,8 +59,8 @@ public class GameLoop {
 
         TerrainGenerator generator = new TerrainGenerator(12345L); // fixed seed for now
 
-        for (int cx = 0; cx < 4; cx++) {
-            for (int cz = 0; cz < 4; cz++) {
+        for (int cx = 0; cx < 8; cx++) {
+            for (int cz = 0; cz < 8; cz++) {
                 ChunkPos pos = new ChunkPos(cx, cz);
                 world.addChunk(pos, generator.generateChunk(pos));
             }
