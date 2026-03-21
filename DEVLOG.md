@@ -156,6 +156,48 @@ learned. Includes honest notes on AI assistance — what worked, what didn't.
 
 ---
 
+## Entry 005 — Flat Chunk and Verified Freecam
+**Date:** 21.03.2026
+**Phase:** 1 — Chunk System and Player Movement
+
+### What Was Done
+- Implemented `Block.java` (enum) in `com.voxelgame.game` — AIR and GRASS types
+- Implemented `Chunk.java` — 16×16×16 block array, bounds-safe get/set/isAir
+- Implemented `ChunkMesher.java` — face-culled mesh generation, emits only faces
+  adjacent to air
+- Replaced triangle with a flat 16×16 GRASS chunk (y=0 layer filled)
+- Enabled `GL_DEPTH_TEST` and `GL_CULL_FACE` in GameLoop init
+- Split `Window.update()` into `pollEvents()` and `swapBuffers()` — events now
+  polled at the start of each frame, eliminating one frame of input lag
+- Repositioned camera spawn to `(8, 5, 20)` — spawns above and in front of chunk
+
+### Problems Encountered
+- Camera spawned inside the chunk on first run — no spatial reference, WASD appeared
+  broken. Fixed by repositioning spawn above the chunk.
+- Side faces rendered inverted — outside invisible, inside visible. Root cause was
+  incorrect CCW winding order on the four side quads in ChunkMesher. Fixed by
+  reversing vertex order on NORTH, SOUTH, EAST, WEST faces.
+- Left/right movement inverted — right vector signs were flipped in GameLoop.update().
+  Fixed by negating sin component and using positive cos.
+- Uniform upload bug carried over from Entry 004 — uniforms were being set after
+  `shaderProgram.unbind()`. Fixed by moving setUniform calls between bind and render.
+
+### AI Assistance Notes
+- Claude wrote Block, ChunkMesher, and the GameLoop wiring with concept explanation
+- Chunk.java delegated to GitHub Copilot (GPT Codex) via prompt
+- Winding order bug required a second pass — original side face quads were incorrect
+- Input lag fix identified during debugging of perceived WASD unresponsiveness
+
+### Lessons / Observations
+- Face culling winding order is easy to get wrong — top/bottom and sides don't share
+  the same "natural" CCW orientation when you write coordinates by hand
+- Having actual geometry in the scene immediately exposed camera position assumptions
+  that weren't visible with just a triangle
+- Chunk render confirms the full pipeline: Java block data → mesher → GPU upload →
+  camera transforms → correct 3D output
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

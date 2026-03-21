@@ -3,6 +3,10 @@ package com.voxelgame.engine;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 
+import com.voxelgame.game.Block;
+import com.voxelgame.game.Chunk;
+import com.voxelgame.game.ChunkMesher;
+
 /**
  * Drives the main engine loop: initialize, loop (update + render), shutdown.
  * Owns the Window and is the top-level coordinator for all engine systems.
@@ -15,7 +19,7 @@ public class GameLoop {
     private Camera camera;
     private InputHandler inputHandler;
     private ShaderProgram shaderProgram;
-    private Mesh triangleMesh;
+    private Mesh chunkMesh;
 
     private static final float MOVEMENT_SPEED = 0.05f;
     private static final float MOUSE_SENSITIVITY = 0.1f;
@@ -43,21 +47,24 @@ public class GameLoop {
      */
     private void init() {
         window.init();
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glEnable(GL11.GL_CULL_FACE);
+
         camera = new Camera(1280,720);
+        camera.getPosition().set(8.0f, 5.0f, 20.0f);
         inputHandler = new InputHandler(window.getWindowHandle());
         inputHandler.init();
 
-        // Triangle vertex positions in NDC (Normalized Device Coordinates):
-        // OpenGL's coordinate space goes from -1.0 to +1.0 on both axes.
-        // (0, 0) is the center of the screen.
-        // These three points form a triangle centered on screen.
-        float[] vertices = {
-             0.0f,  0.5f, 0.0f,  // top center
-            -0.5f, -0.5f, 0.0f,  // bottom left
-             0.5f, -0.5f, 0.0f   // bottom right
-        };
+        Chunk chunk = new Chunk();
+        // Fill the bottom layer (y=0) with GRASS — a flat 16x16 surface
+        for (int x = 0; x < Chunk.SIZE; x++) {
+            for (int z = 0; z < Chunk.SIZE; z++) {
+                chunk.setBlock(x, 0, z, Block.GRASS);
+            }
+        }
+        float[] chunkVertices = ChunkMesher.mesh(chunk);
+        chunkMesh = new Mesh(chunkVertices);
 
-        triangleMesh  = new Mesh(vertices);
         shaderProgram = new ShaderProgram("/shaders/default.vert", "/shaders/default.frag");
 
         System.out.println("Engine initialized. OpenGL context active.");
@@ -75,6 +82,8 @@ public class GameLoop {
         double diagnosticTimer = System.currentTimeMillis();
 
         while (!window.shouldClose()) {
+            window.pollEvents(); // process OS events FIRST
+            
             double currentTime = System.currentTimeMillis();
             double elapsed     = currentTime - previousTime;
             previousTime       = currentTime;
@@ -96,7 +105,7 @@ public class GameLoop {
                 diagnosticTimer = System.currentTimeMillis();
             }
 
-            window.update();
+            window.swapBuffers(); // present frame AFTER render
         }
     }
 
@@ -122,8 +131,8 @@ public class GameLoop {
             (float)  Math.sin(yawRad)
         ).normalize();
         org.joml.Vector3f right = new org.joml.Vector3f(
-            (float)  Math.sin(yawRad), 0.0f,
-            (float) -Math.cos(yawRad)
+            (float) -Math.sin(yawRad), 0.0f,
+            (float)  Math.cos(yawRad)
         ).normalize();
 
         org.joml.Vector3f position = camera.getPosition();
@@ -150,18 +159,17 @@ public class GameLoop {
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
 
         shaderProgram.bind();
-        triangleMesh.render();
-        shaderProgram.unbind();
-
         shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
         shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
+        chunkMesh.render();
+        shaderProgram.unbind();
     }
 
     /**
      * Shuts down all engine subsystems in reverse initialization order.
      */
     private void cleanup() {
-        triangleMesh.cleanup();
+        chunkMesh.cleanup();
         shaderProgram.cleanup();
         window.cleanup();
         System.out.println("Engine shut down cleanly.");

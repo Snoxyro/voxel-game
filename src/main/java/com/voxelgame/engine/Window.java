@@ -85,13 +85,14 @@ public class Window {
         return GLFW.glfwWindowShouldClose(windowHandle);
     }
 
-    /**
-     * Called once per frame. Swaps the front and back buffers to display
-     * the rendered frame, then polls for OS input events.
-     */
-    public void update() {
-        GLFW.glfwSwapBuffers(windowHandle);
+    /** Polls pending OS input events. Call at the start of each frame. */
+    public void pollEvents() {
         GLFW.glfwPollEvents();
+    }
+
+    /** Swaps front and back buffers to display the rendered frame. */
+    public void swapBuffers() {
+        GLFW.glfwSwapBuffers(windowHandle);
     }
 
     /**
