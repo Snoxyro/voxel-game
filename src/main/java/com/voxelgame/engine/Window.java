@@ -101,4 +101,9 @@ public class Window {
         GLFW.glfwDestroyWindow(windowHandle);
         GLFW.glfwTerminate();
     }
+    
+    /** @return the GLFW window handle */
+    public long getWindowHandle() {
+        return windowHandle;
+    }
 }

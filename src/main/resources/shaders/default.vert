@@ -1,12 +1,14 @@
 #version 450 core
 
-// 'layout location = 0' means this variable receives data from slot 0 of the VAO
-// We'll tell the VAO that slot 0 contains our vertex positions
 layout (location = 0) in vec3 position;
 
+// Uniforms — set from Java once per frame before drawing.
+// 'uniform' means the value is the same for every vertex in a draw call.
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+
 void main() {
-    // gl_Position is a built-in GLSL output — it's the final clip-space position
-    // of this vertex. vec4 is a 4-component vector; the 1.0 in the w component
-    // is required by the math but not important to understand yet.
-    gl_Position = vec4(position, 1.0);
+    // Apply view (camera position/orientation), then projection (perspective + aspect ratio).
+    // Order matters: transformations are applied right-to-left.
+    gl_Position = projectionMatrix * viewMatrix * vec4(position, 1.0);
 }

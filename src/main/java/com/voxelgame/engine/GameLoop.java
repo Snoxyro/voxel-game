@@ -1,5 +1,6 @@
 package com.voxelgame.engine;
 
+import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 
 /**
@@ -11,9 +12,14 @@ public class GameLoop {
     private static final int TARGET_UPS = 60;
 
     private final Window window;
+    private Camera camera;
+    private InputHandler inputHandler;
     private ShaderProgram shaderProgram;
     private Mesh triangleMesh;
 
+    private static final float MOVEMENT_SPEED = 0.05f;
+    private static final float MOUSE_SENSITIVITY = 0.1f;
+    
     /**
      * Constructs the GameLoop and its owned subsystems.
      */
@@ -37,6 +43,9 @@ public class GameLoop {
      */
     private void init() {
         window.init();
+        camera = new Camera(1280,720);
+        inputHandler = new InputHandler(window.getWindowHandle());
+        inputHandler.init();
 
         // Triangle vertex positions in NDC (Normalized Device Coordinates):
         // OpenGL's coordinate space goes from -1.0 to +1.0 on both axes.
@@ -95,7 +104,43 @@ public class GameLoop {
      * Game logic update — called TARGET_UPS times per second.
      */
     private void update() {
-        // Nothing yet
+        inputHandler.update();
+
+        // --- Mouse look ---
+        float yaw   = camera.getYaw()   + inputHandler.getMouseDeltaX() * MOUSE_SENSITIVITY;
+        float pitch = camera.getPitch() - inputHandler.getMouseDeltaY() * MOUSE_SENSITIVITY;
+        // Pitch delta is subtracted because screen Y increases downward but pitch up is positive
+        camera.setYaw(yaw);
+        camera.setPitch(pitch); // Camera.setPitch already clamps to ±89°
+
+        // --- Keyboard movement ---
+        // Build the forward and right vectors from the current yaw.
+        // We ignore pitch for movement so you don't fly up just by looking up.
+        float yawRad  = (float) Math.toRadians(camera.getYaw());
+        org.joml.Vector3f forward = new org.joml.Vector3f(
+            (float)  Math.cos(yawRad), 0.0f,
+            (float)  Math.sin(yawRad)
+        ).normalize();
+        org.joml.Vector3f right = new org.joml.Vector3f(
+            (float)  Math.sin(yawRad), 0.0f,
+            (float) -Math.cos(yawRad)
+        ).normalize();
+
+        org.joml.Vector3f position = camera.getPosition();
+
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_W)) position.add(new org.joml.Vector3f(forward).mul(MOVEMENT_SPEED));
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_S)) position.sub(new org.joml.Vector3f(forward).mul(MOVEMENT_SPEED));
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_A)) position.sub(new org.joml.Vector3f(right).mul(MOVEMENT_SPEED));
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_D)) position.add(new org.joml.Vector3f(right).mul(MOVEMENT_SPEED));
+
+        // Vertical movement — Space goes up, Shift goes down
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_SPACE))      position.y += MOVEMENT_SPEED;
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT)) position.y -= MOVEMENT_SPEED;
+
+        // Escape releases the cursor and closes the window
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_ESCAPE)) {
+            GLFW.glfwSetWindowShouldClose(window.getWindowHandle(), true);
+        }
     }
 
     /**
@@ -107,6 +152,9 @@ public class GameLoop {
         shaderProgram.bind();
         triangleMesh.render();
         shaderProgram.unbind();
+
+        shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
+        shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
     }
 
     /**
