@@ -290,6 +290,56 @@ learned. Includes honest notes on AI assistance — what worked, what didn't.
 
 ---
 
+## Entry 008 — 3D Chunk Positions and Full-Height Terrain
+**Date:** 21.03.2026
+**Phase:** 2 — World Generation
+
+### What Was Done
+- Extended `ChunkPos` from a 2D record (x, z) to a 3D record (x, y, z) with a
+  `worldY()` helper alongside the existing `worldX()` and `worldZ()`
+- Updated `TerrainGenerator.generateChunk()` to generate only the blocks that fall
+  within a given chunk's world-space Y range — chunks fully above the surface remain
+  air, chunks fully below are stone, boundary chunks receive the GRASS/DIRT/STONE
+  layering as before
+- Updated `World.render()` model matrix to include Y translation via `pos.worldY()`
+- Updated `GameLoop` to seed an 8×5×8 chunk grid (8 XZ, 5 Y levels = 80 blocks
+  of vertical headroom)
+- Raised `BASE_HEIGHT` to 16 and `HEIGHT_VARIATION` to 48 — surface range is now
+  [16, 64], fully visible within the 5 Y chunk levels
+- Raised `BASE_FREQUENCY` to 0.006 for more visible terrain variation across the grid
+- Removed unused `chunkWorldYTop` variable from `TerrainGenerator`
+
+### Decisions Made
+- **3D chunk grid is the correct long-term architecture.** The 2D column model
+  (one chunk per XZ column) would have imposed a hard height limit and made caves,
+  underground structures, and vertical streaming impossible without a painful retrofit.
+  Changing this now while the codebase is small was the right call.
+- Chunks are the atomic unit of the world in all three axes — sky, surface, and
+  underground all live in the same chunk type with no special cases.
+- `TerrainGenerator` computes surface height in world space and each chunk only
+  fills its own Y slice — the generator is stateless and parallelizable per chunk.
+
+### Problems Encountered
+- Unused variable `chunkWorldYTop` left in from a draft early-exit — removed.
+
+### AI Assistance Notes
+- Claude identified this as the last easy moment to make the architectural change
+  before Phase 3 gameplay adds more dependencies on ChunkPos
+- All four changed files (ChunkPos, TerrainGenerator, World, GameLoop) worked
+  correctly on first run
+
+### Lessons / Observations
+- The change touched only 4 files and left Chunk, ChunkMesher, Mesh, ShaderProgram,
+  and all shaders completely untouched — good sign that the abstraction boundaries
+  are in the right places
+- With HEIGHT_VARIATION at 48, terrain height differences are now clearly visible
+  as multi-chunk cliffs and valleys rather than shallow steps
+- The 3D chunk grid means future features (caves, dungeons, floating islands, sky
+  limit removal) all come for free with no further architectural changes
+```
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

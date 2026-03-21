@@ -59,10 +59,12 @@ public class GameLoop {
 
         TerrainGenerator generator = new TerrainGenerator(12345L); // fixed seed for now
 
-        for (int cx = 0; cx < 8; cx++) {
-            for (int cz = 0; cz < 8; cz++) {
-                ChunkPos pos = new ChunkPos(cx, cz);
-                world.addChunk(pos, generator.generateChunk(pos));
+        for (int cx = 0; cx < 8; cx++) { // 8 chunk X columns = 128 blocks wide
+            for (int cz = 0; cz < 8; cz++) { // 8 chunk Z columns = 128 blocks wide
+                for (int cy = 0; cy < 5; cy++) {  // 5 chunk Y levels = 80 blocks of headroom
+                    ChunkPos pos = new ChunkPos(cx, cy, cz);
+                    world.addChunk(pos, generator.generateChunk(pos));
+                }
             }
         }
 

@@ -46,7 +46,7 @@ public class World {
 
             // Build a translation matrix for this chunk's world-space origin
             Matrix4f modelMatrix = new Matrix4f().translation(
-                pos.worldX(), 0.0f, pos.worldZ()
+                pos.worldX(), pos.worldY(), pos.worldZ()
             );
 
             shader.setUniform("modelMatrix", modelMatrix);
