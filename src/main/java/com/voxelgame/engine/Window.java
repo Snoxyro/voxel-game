@@ -95,6 +95,16 @@ public class Window {
     }
 
     /**
+     * Returns the GLFW window handle.
+     * Required for input handling and other GLFW operations.
+     *
+     * @return the window handle (long ID)
+     */
+    public long getWindowHandle() {
+        return windowHandle;
+    }
+
+    /**
      * Releases all GLFW and window resources. Must be called on shutdown.
      */
     public void cleanup() {
