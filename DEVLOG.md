@@ -198,6 +198,45 @@ learned. Includes honest notes on AI assistance — what worked, what didn't.
 
 ---
 
+## Entry 006 — Multi-Chunk World Management
+**Date:** 21.03.2026
+**Phase:** 1 — Chunk System and Player Movement
+
+### What Was Done
+- Implemented `ChunkPos.java` as a Java record — immutable chunk grid coordinate
+  with `worldX()` and `worldZ()` helpers for world-space translation
+- Implemented `World.java` — holds chunks and GPU meshes in separate HashMaps,
+  handles mesh generation, per-chunk model matrix translation, and cleanup
+- Updated `default.vert` to include `modelMatrix` uniform — full MVP transform
+  now in place (model × view × projection)
+- Added `setUniform(String, Matrix4f)` call for model matrix in `World.render()`
+- Updated `GameLoop` to use `World` — seeds a 4×4 grid of flat GRASS chunks
+- Removed single hardcoded `Mesh` from `GameLoop`
+
+### Decisions Made
+- `ChunkPos` uses only X and Z — one chunk per vertical column for now. Adding
+  vertical stacking later will require adding Y to ChunkPos and updating World.
+- `Chunk` and `Mesh` stored in separate maps — chunk data and GPU resources remain
+  decoupled, allowing independent mesh rebuilds and future streaming
+- Empty chunks (all air) produce no mesh — guarded in `rebuildMesh()`
+
+### Problems Encountered
+- None. 4×4 chunk grid rendered correctly on first run.
+
+### AI Assistance Notes
+- Claude wrote all files with concept explanations for chunk-space vs world-space
+  coordinates and the model matrix translation
+
+### Lessons / Observations
+- Faces between adjacent chunks are still generated and visible from below —
+  known limitation, deferred to Phase 4 optimization (neighbor-aware meshing)
+- Chunk seams are invisible from above — world-space translation via model matrix
+  is seamless
+- Phase 1 complete. Camera, input, chunk data, meshing, and world management
+  all verified working.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

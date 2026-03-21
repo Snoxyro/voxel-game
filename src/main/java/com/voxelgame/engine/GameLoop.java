@@ -5,7 +5,8 @@ import org.lwjgl.opengl.GL11;
 
 import com.voxelgame.game.Block;
 import com.voxelgame.game.Chunk;
-import com.voxelgame.game.ChunkMesher;
+import com.voxelgame.game.ChunkPos;
+import com.voxelgame.game.World;
 
 /**
  * Drives the main engine loop: initialize, loop (update + render), shutdown.
@@ -19,7 +20,7 @@ public class GameLoop {
     private Camera camera;
     private InputHandler inputHandler;
     private ShaderProgram shaderProgram;
-    private Mesh chunkMesh;
+    private World world;
 
     private static final float MOVEMENT_SPEED = 0.05f;
     private static final float MOUSE_SENSITIVITY = 0.1f;
@@ -55,15 +56,20 @@ public class GameLoop {
         inputHandler = new InputHandler(window.getWindowHandle());
         inputHandler.init();
 
-        Chunk chunk = new Chunk();
-        // Fill the bottom layer (y=0) with GRASS — a flat 16x16 surface
-        for (int x = 0; x < Chunk.SIZE; x++) {
-            for (int z = 0; z < Chunk.SIZE; z++) {
-                chunk.setBlock(x, 0, z, Block.GRASS);
+        world = new World();
+
+        // Seed a 4x4 grid of flat chunks
+        for (int cx = 0; cx < 4; cx++) {
+            for (int cz = 0; cz < 4; cz++) {
+                Chunk chunk = new Chunk();
+                for (int x = 0; x < Chunk.SIZE; x++) {
+                    for (int z = 0; z < Chunk.SIZE; z++) {
+                        chunk.setBlock(x, 0, z, Block.GRASS);
+                    }
+                }
+                world.addChunk(new ChunkPos(cx, cz), chunk);
             }
         }
-        float[] chunkVertices = ChunkMesher.mesh(chunk);
-        chunkMesh = new Mesh(chunkVertices);
 
         shaderProgram = new ShaderProgram("/shaders/default.vert", "/shaders/default.frag");
 
@@ -161,7 +167,7 @@ public class GameLoop {
         shaderProgram.bind();
         shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
         shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
-        chunkMesh.render();
+        world.render(shaderProgram);
         shaderProgram.unbind();
     }
 
@@ -169,7 +175,7 @@ public class GameLoop {
      * Shuts down all engine subsystems in reverse initialization order.
      */
     private void cleanup() {
-        chunkMesh.cleanup();
+        world.cleanup();
         shaderProgram.cleanup();
         window.cleanup();
         System.out.println("Engine shut down cleanly.");
