@@ -9,8 +9,11 @@ import org.lwjgl.system.MemoryUtil;
 import java.nio.FloatBuffer;
 
 /**
- * Holds a mesh — vertex data uploaded to the GPU via a VAO and VBO.
- * For now, supports simple float vertex arrays (positions only).
+ * Holds a mesh — interleaved vertex data (position + color) uploaded to the GPU
+ * via a VAO and VBO.
+ *
+ * <p>Vertex layout: [x, y, z, r, g, b] — 6 floats, 24 bytes per vertex.
+ * Attribute slot 0 = position (vec3), attribute slot 1 = color (vec3).
  */
 public class Mesh {
 
@@ -24,12 +27,12 @@ public class Mesh {
     private final int vertexCount;
 
     /**
-     * Uploads the given vertex positions to the GPU.
+     * Uploads interleaved vertex data to the GPU.
      *
-     * @param vertices flat float array of vertex positions: [x0,y0,z0, x1,y1,z1, ...]
+     * @param vertices interleaved float array: [x, y, z, r, g, b, x, y, z, r, g, b, ...]
      */
     public Mesh(float[] vertices) {
-        vertexCount = vertices.length / 3; // 3 floats per vertex (x, y, z)
+        vertexCount = vertices.length / 6; // 6 floats per vertex (x, y, z, r, g, b)
 
         // Create and bind the VAO first — everything we set up next gets remembered by it
         vaoId = GL30.glGenVertexArrays();
@@ -48,16 +51,18 @@ public class Mesh {
         // Free the off-heap buffer — data is now on the GPU, we don't need this copy
         MemoryUtil.memFree(vertexBuffer);
 
-        // Tell the VAO how to interpret the VBO data:
-        // - Attribute slot 0 (matches 'layout location = 0' in the vertex shader)
-        // - 3 floats per vertex
-        // - Not normalized
-        // - Stride 0 (floats are tightly packed)
-        // - Offset 0 (start from the beginning)
-        GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, 0, 0);
+        // Stride = 24 bytes (6 floats × 4 bytes each) — the gap between the start
+        // of one vertex and the start of the next
+        int stride = 6 * Float.BYTES;
+
+        // Attribute 0 — position: 3 floats, starts at byte 0
+        GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, stride, 0);
         GL20.glEnableVertexAttribArray(0);
 
-        // Unbind — good practice to avoid accidentally modifying state later
+        // Attribute 1 — color: 3 floats, starts at byte 12 (after the 3 position floats)
+        GL20.glVertexAttribPointer(1, 3, GL11.GL_FLOAT, false, stride, 3 * Float.BYTES);
+        GL20.glEnableVertexAttribArray(1);
+
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL30.glBindVertexArray(0);
     }

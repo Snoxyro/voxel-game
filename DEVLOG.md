@@ -237,6 +237,50 @@ learned. Includes honest notes on AI assistance — what worked, what didn't.
 
 ---
 
+## Entry 007 — Noise Terrain and Vertex Colors
+**Date:** 21.03.2026
+**Phase:** 2 — World Generation
+
+### What Was Done
+- Added `OpenSimplex2S.java` to `com.voxelgame.util` (public domain, static API)
+- Added DIRT and STONE to `Block.java` with per-block `color()` returning float[3] RGB
+- Implemented `TerrainGenerator.java` — 2D noise height map with BASE_HEIGHT + HEIGHT_VARIATION
+  range, GRASS/DIRT/STONE layering rules, world-space coordinate sampling for seamless
+  cross-chunk consistency
+- Rewrote `Mesh.java` to use interleaved vertex layout: [x, y, z, r, g, b] — 6 floats per
+  vertex, stride/offset setup for two vertex attribute slots
+- Rewrote `ChunkMesher.java` to emit color data alongside position, with directional
+  brightness multipliers baked at mesh-build time: top=1.0, sides=0.7, bottom=0.5
+- Updated `default.vert` to receive color at layout location 1 and pass to fragment shader
+- Updated `default.frag` to output interpolated vertex color instead of hardcoded orange
+- Updated `GameLoop.init()` to seed world via TerrainGenerator with fixed seed 12345L
+
+### Decisions Made
+- OpenSimplex2S static API used directly — seed passed per noise call, no instance state
+- Directional shading baked into mesh at build time rather than computed in shader —
+  simple, zero runtime cost, sufficient for this phase
+- Block color lives on the Block enum — block-specific data belongs with the block definition
+- NOISE_SCALE=0.04 produces broad smooth hills; tunable constant for later biome work
+
+### Problems Encountered
+- Downloaded OpenSimplex2S uses a static API (seed per call) not a constructor-based
+  instance. TerrainGenerator adjusted to store the seed as a long and pass it to each
+  noise2() call.
+
+### AI Assistance Notes
+- Claude wrote all files with concept explanations for interleaved vertex buffers,
+  stride/offset layout, and noise remapping math
+- All code worked on first run after the OpenSimplex2S API mismatch was corrected
+
+### Lessons / Observations
+- Directional shading with a single brightness multiplier per face direction gives
+  surprisingly good depth readability at near-zero cost
+- Noise scale has a large visual impact — worth exposing as a tunable constant early
+- Stone is not visible from above yet — need to walk to the edge to see the layering.
+  Caves or overhangs in a later phase will expose it from above.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

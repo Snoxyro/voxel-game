@@ -3,9 +3,8 @@ package com.voxelgame.engine;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 
-import com.voxelgame.game.Block;
-import com.voxelgame.game.Chunk;
 import com.voxelgame.game.ChunkPos;
+import com.voxelgame.game.TerrainGenerator;
 import com.voxelgame.game.World;
 
 /**
@@ -52,22 +51,18 @@ public class GameLoop {
         GL11.glEnable(GL11.GL_CULL_FACE);
 
         camera = new Camera(1280,720);
-        camera.getPosition().set(8.0f, 5.0f, 20.0f);
+        camera.getPosition().set(32.0f, 20.0f, 48.0f);
         inputHandler = new InputHandler(window.getWindowHandle());
         inputHandler.init();
 
         world = new World();
 
-        // Seed a 4x4 grid of flat chunks
+        TerrainGenerator generator = new TerrainGenerator(12345L); // fixed seed for now
+
         for (int cx = 0; cx < 4; cx++) {
             for (int cz = 0; cz < 4; cz++) {
-                Chunk chunk = new Chunk();
-                for (int x = 0; x < Chunk.SIZE; x++) {
-                    for (int z = 0; z < Chunk.SIZE; z++) {
-                        chunk.setBlock(x, 0, z, Block.GRASS);
-                    }
-                }
-                world.addChunk(new ChunkPos(cx, cz), chunk);
+                ChunkPos pos = new ChunkPos(cx, cz);
+                world.addChunk(pos, generator.generateChunk(pos));
             }
         }
 
