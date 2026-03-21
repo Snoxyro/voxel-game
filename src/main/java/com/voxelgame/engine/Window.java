@@ -94,7 +94,7 @@ public class Window {
         });
         GLFW.glfwSetFramebufferSizeCallback(windowHandle, framebufferSizeCallback);
 
-        GL11.glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        GL11.glClearColor(0.5f, 0.7f, 1.0f, 1.0f); // Sky blue background
         GLFW.glfwShowWindow(windowHandle);
     }
 

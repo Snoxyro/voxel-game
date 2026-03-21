@@ -450,6 +450,102 @@ learned. Includes honest notes on AI assistance — what worked, what didn't.
 
 ---
 
+## Entry 011 — Player Physics and Freecam Toggle
+**Date:** 22.03.2026
+**Phase:** 3 — Gameplay Basics
+
+### What Was Done
+- Implemented `PhysicsBody.java` — reusable physics component owning position,
+  velocity, AABB dimensions, gravity, and per-axis collision resolution against
+  world blocks. Designed to be owned by any entity (player, mob, etc.) without
+  modification.
+- Implemented `Player.java` — owns a PhysicsBody, translates horizontal movement
+  intent into velocity each tick, exposes eye position for camera placement.
+- Added F-key freecam toggle to `GameLoop` — switches between physics-driven
+  player movement and the old fly camera. Transitions snap position cleanly in
+  both directions so the view never jumps.
+- Spawn position set to Y=70, above the tallest possible terrain surface (max
+  surface is BASE_HEIGHT + HEIGHT_VARIATION = 64), so the player always falls
+  onto terrain cleanly on first load.
+- Physics mode: WASD controls horizontal movement, Space jumps (grounded only),
+  gravity and collision handled by PhysicsBody.
+- Camera follows player eye position (feet + 1.62 offset) every tick in physics
+  mode.
+
+### Decisions Made
+- `PhysicsBody` is input-agnostic — it receives pre-processed velocity from the
+  owning entity, not raw input. This makes it directly reusable for AI-driven
+  mobs with no changes, aligning with the ECS architecture goal.
+- Per-axis collision resolution (X → Y → Z separately) — standard voxel approach.
+  Allows smooth wall-sliding instead of stopping dead at corners.
+- `DELTA_TIME` is a fixed constant (1/60s) rather than a measured elapsed time —
+  deterministic physics, no frame-rate dependent behaviour.
+- `PhysicsBody` lives in `com.voxelgame.game` — it queries `World` for block
+  solidity, which is game logic. No engine/game boundary violation.
+
+### Problems Encountered
+- None. Physics worked correctly on first run.
+
+### AI Assistance Notes
+- Claude wrote all files with full concept explanation of AABB per-axis collision
+  resolution before the code was written.
+- Architecture decision to separate PhysicsBody from Player flagged proactively
+  for future mob reuse.
+
+### Lessons / Observations
+- Per-axis AABB resolution is elegant — the player slides along walls naturally
+  without any special-case code for that behaviour.
+- The gravity/onGround loop is stable: gravity pushes the player a tiny distance
+  into the ground each tick, the Y resolver snaps them back, position is stable.
+
+---
+
+## Entry 012 — Air Control, Block Placement Guard, Sky Color
+**Date:** 22.03.2026
+**Phase:** 3 — Gameplay Basics
+
+### What Was Done
+- Reduced air control in `Player.update()` — when airborne, horizontal velocity
+  lerps toward the desired direction at 10% per tick instead of snapping instantly.
+  Momentum is preserved mid-air, movement feels physically believable.
+- Added `PhysicsBody.overlapsBlock(bx, by, bz)` — AABB vs unit block overlap test.
+  Reusable for any future entity collision query.
+- Block placement guard in `GameLoop` — right-click checks `overlapsBlock` before
+  calling `world.setBlock`. Placement is blocked if the target position intersects
+  the player's AABB. Guard is skipped in freecam mode (freecam can place anywhere).
+- Sky color changed from dark grey to light blue (`glClearColor(0.5, 0.7, 1.0, 1.0)`).
+
+### Decisions Made
+- Air control lives in `Player.update()` not `PhysicsBody` — it is a player
+  movement policy, not a physics primitive. A future mob might want different
+  air control behaviour without changing the physics layer.
+- `overlapsBlock` lives on `PhysicsBody` — it depends only on AABB geometry,
+  making it reusable for any entity that owns a body.
+- Freecam bypasses the placement guard — consistent with its role as a
+  debug/building tool with no physical presence in the world.
+
+### Problems Encountered
+- None.
+
+### AI Assistance Notes
+- Claude wrote all changes.
+
+### Lessons / Observations
+- The 0.1 lerp factor for air control produces a smooth, satisfying feel —
+  responsive enough to steer jumps, sluggish enough to feel like real momentum.
+- Phase 3 complete. The game loop now has full player physics, block interaction,
+  HUD, and a visually coherent world.
+
+### Phase 3 Summary
+Phase 3 delivered: DDA raycasting, block breaking and placing, block highlight,
+crosshair HUD, player physics (gravity, AABB collision, jumping), air control,
+freecam toggle, cursor capture toggle, window resize support, and sky color.
+The project is now a functional voxel sandbox. Phase 4 focuses on performance
+and rendering quality: greedy meshing, frustum culling, neighbour-aware chunk
+boundaries, and the window drag freeze.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

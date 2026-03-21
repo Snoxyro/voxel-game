@@ -6,6 +6,7 @@ import org.lwjgl.opengl.GL11;
 
 import com.voxelgame.game.Block;
 import com.voxelgame.game.ChunkPos;
+import com.voxelgame.game.Player;
 import com.voxelgame.game.RayCaster;
 import com.voxelgame.game.RaycastResult;
 import com.voxelgame.game.TerrainGenerator;
@@ -17,39 +18,60 @@ import com.voxelgame.game.World;
  */
 public class GameLoop {
 
-    private static final int   TARGET_UPS       = 60;
-    private static final float MOVEMENT_SPEED   = 0.15f;
+    private static final int   TARGET_UPS        = 60;
+
+    /**
+     * Fixed time step per update tick in seconds.
+     * Physics and movement scale by this value so behaviour is frame-rate independent.
+     */
+    private static final float DELTA_TIME        = 1.0f / TARGET_UPS;
+
+    private static final float FREECAM_SPEED     = 0.15f;
     private static final float MOUSE_SENSITIVITY = 0.1f;
 
     /** Maximum block interaction range in blocks. */
     private static final float REACH = 5.0f;
 
+    /**
+     * Spawn position — Y=70 places the player above the tallest possible terrain
+     * (max surface height is BASE_HEIGHT + HEIGHT_VARIATION = 16 + 48 = 64),
+     * so the player always falls cleanly onto the surface on first load.
+     */
+    private static final float SPAWN_X = 64.0f;
+    private static final float SPAWN_Y = 70.0f;
+    private static final float SPAWN_Z = 64.0f;
+
     private final Window window;
-    private Camera             camera;
-    private InputHandler       inputHandler;
-    private ShaderProgram      shaderProgram;
-    private World              world;
+    private Camera                 camera;
+    private InputHandler           inputHandler;
+    private ShaderProgram          shaderProgram;
+    private World                  world;
+    private Player                 player;
     private BlockHighlightRenderer blockHighlight;
     private HudRenderer            hudRenderer;
 
-    /**
-     * Result of the raycast cast during the last update() tick.
-     * Shared between update() (writes) and render() (reads).
-     */
+    /** Result of the raycast from the last update() tick. Read during render(). */
     private RaycastResult lastRaycast = RaycastResult.miss();
 
-    /**
-     * The block type placed on right-click.
-     * Toggle with keys 1 (GRASS), 2 (DIRT), 3 (STONE).
-     */
+    /** Block type placed on right-click. Toggle with keys 1/2/3. */
     private Block selectedBlock = Block.DIRT;
 
     /** True when the cursor is captured and camera look is active. */
     private boolean cursorCaptured = true;
 
-    /** Last known framebuffer dimensions — used to detect resizes. */
-    private int lastFbWidth  = 1280;
-    private int lastFbHeight = 720;
+    /**
+     * When true: WASD flies freely, Space/Shift move up/down, no gravity.
+     * When false: normal player physics — gravity, collision, jumping.
+     * Toggle with F key.
+     */
+    private boolean freecam = false;
+
+    /** Last known framebuffer size — used to detect resizes and sync the camera. */
+    private int lastFbWidth;
+    private int lastFbHeight;
+
+    /** Whether the F key was down last tick — used for edge detection. */
+    private boolean lastFKeyDown = false;
 
     /**
      * Constructs the GameLoop and its owned subsystems.
@@ -80,14 +102,16 @@ public class GameLoop {
         lastFbWidth  = window.getFramebufferWidth();
         lastFbHeight = window.getFramebufferHeight();
         camera = new Camera(lastFbWidth, lastFbHeight);
-        camera.getPosition().set(64.0f, 30.0f, 96.0f);
+
+        // Camera starts at eye position above spawn — will be overridden by
+        // physics mode each tick, but needs a sane initial value.
+        camera.getPosition().set(SPAWN_X, SPAWN_Y + Player.EYE_HEIGHT, SPAWN_Z);
 
         inputHandler = new InputHandler(window.getWindowHandle());
         inputHandler.init();
 
         world = new World();
         TerrainGenerator generator = new TerrainGenerator(12345L);
-
         for (int cx = 0; cx < 8; cx++) {
             for (int cz = 0; cz < 8; cz++) {
                 for (int cy = 0; cy < 5; cy++) {
@@ -97,16 +121,21 @@ public class GameLoop {
             }
         }
 
+        player = new Player(SPAWN_X, SPAWN_Y, SPAWN_Z);
+
         shaderProgram  = new ShaderProgram("/shaders/default.vert", "/shaders/default.frag");
         blockHighlight = new BlockHighlightRenderer();
         hudRenderer    = new HudRenderer();
 
-        System.out.println("Engine initialized. OpenGL context active.");
-        System.out.println("Controls: WASD move, Space/Shift up/down, mouse look");
-        System.out.println("  Left click  — break block");
+        System.out.println("Engine initialized.");
+        System.out.println("Controls: WASD move | mouse look");
+        System.out.println("  Space       — jump (physics) / fly up (freecam)");
+        System.out.println("  Left Shift  — fly down (freecam only)");
+        System.out.println("  F           — toggle freecam / physics");
+        System.out.println("  Left click  — break block (or re-capture cursor)");
         System.out.println("  Right click — place block");
         System.out.println("  1/2/3       — select GRASS / DIRT / STONE");
-        System.out.println("  Escape      — release cursor (click to re-capture)");
+        System.out.println("  Escape      — release cursor");
     }
 
     /**
@@ -138,8 +167,8 @@ public class GameLoop {
             frames++;
 
             if (System.currentTimeMillis() - diagnosticTimer >= 1000.0) {
-                System.out.printf("FPS: %d | UPS: %d | Selected: %s%n",
-                    frames, updates, selectedBlock);
+                System.out.printf("FPS: %d | UPS: %d | Mode: %s | Selected: %s%n",
+                    frames, updates, freecam ? "FREECAM" : "PHYSICS", selectedBlock);
                 frames          = 0;
                 updates         = 0;
                 diagnosticTimer = System.currentTimeMillis();
@@ -150,112 +179,138 @@ public class GameLoop {
     }
 
     /**
- * Game logic update — called TARGET_UPS times per second.
- * Handles input, camera movement, raycasting, and block interaction.
- */
-private void update() {
-    inputHandler.update();
+     * Game logic update — called TARGET_UPS times per second.
+     */
+    private void update() {
+        inputHandler.update();
 
-    // --- Window resize: sync camera aspect ratio ---
-    // Checked every tick — cheap comparison, only rebuilds projection when needed.
-    int fbw = window.getFramebufferWidth();
-    int fbh = window.getFramebufferHeight();
-    if (fbw != lastFbWidth || fbh != lastFbHeight) {
-        camera.setAspectRatio(fbw, fbh);
-        lastFbWidth  = fbw;
-        lastFbHeight = fbh;
-    }
-
-    // --- Escape: toggle cursor capture ---
-    // First press releases the cursor so the player can interact with the OS.
-    // Clicking back in the window re-captures it.
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_ESCAPE) && cursorCaptured) {
-        cursorCaptured = false;
-        GLFW.glfwSetInputMode(window.getWindowHandle(),
-            GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
-    }
-    if (inputHandler.wasMouseLeftClicked() && !cursorCaptured) {
-        cursorCaptured = true;
-        GLFW.glfwSetInputMode(window.getWindowHandle(),
-            GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
-        return; // skip this click — don't break a block on re-capture
-    }
-
-    // Only rotate the camera while the cursor is captured
-    if (cursorCaptured) {
-        float yaw   = camera.getYaw()   + inputHandler.getMouseDeltaX() * MOUSE_SENSITIVITY;
-        float pitch = camera.getPitch() - inputHandler.getMouseDeltaY() * MOUSE_SENSITIVITY;
-        camera.setYaw(yaw);
-        camera.setPitch(pitch);
-    }
-
-    // --- Keyboard movement ---
-    float yawRad = (float) Math.toRadians(camera.getYaw());
-    Vector3f forward = new Vector3f(
-        (float)  Math.cos(yawRad), 0.0f,
-        (float)  Math.sin(yawRad)
-    ).normalize();
-    Vector3f right = new Vector3f(
-        (float) -Math.sin(yawRad), 0.0f,
-        (float)  Math.cos(yawRad)
-    ).normalize();
-
-    Vector3f position = camera.getPosition();
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_W)) position.add(new Vector3f(forward).mul(MOVEMENT_SPEED));
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_S)) position.sub(new Vector3f(forward).mul(MOVEMENT_SPEED));
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_A)) position.sub(new Vector3f(right).mul(MOVEMENT_SPEED));
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_D)) position.add(new Vector3f(right).mul(MOVEMENT_SPEED));
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_SPACE))      position.y += MOVEMENT_SPEED;
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT)) position.y -= MOVEMENT_SPEED;
-
-    // --- Block type selection ---
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_1)) selectedBlock = Block.GRASS;
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_2)) selectedBlock = Block.DIRT;
-    if (inputHandler.isKeyDown(GLFW.GLFW_KEY_3)) selectedBlock = Block.STONE;
-
-    // --- Raycast: find the block the camera is looking at ---
-    float pitchRad = (float) Math.toRadians(camera.getPitch());
-    Vector3f lookDir = new Vector3f(
-        (float) (Math.cos(yawRad) * Math.cos(pitchRad)),
-        (float)  Math.sin(pitchRad),
-        (float) (Math.sin(yawRad) * Math.cos(pitchRad))
-    );
-    lastRaycast = RayCaster.cast(camera.getPosition(), lookDir, world, REACH);
-
-    // --- Block interaction (only while cursor is captured) ---
-    if (cursorCaptured && lastRaycast.hit()) {
-        if (inputHandler.wasMouseLeftClicked()) {
-            world.setBlock(lastRaycast.blockX(), lastRaycast.blockY(),
-                           lastRaycast.blockZ(), Block.AIR);
+        // --- Window resize ---
+        int fbw = window.getFramebufferWidth();
+        int fbh = window.getFramebufferHeight();
+        if (fbw != lastFbWidth || fbh != lastFbHeight) {
+            camera.setAspectRatio(fbw, fbh);
+            lastFbWidth  = fbw;
+            lastFbHeight = fbh;
         }
-        if (inputHandler.wasMouseRightClicked()) {
-            world.setBlock(lastRaycast.placeX(), lastRaycast.placeY(),
-                           lastRaycast.placeZ(), selectedBlock);
+
+        // --- Cursor toggle ---
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_ESCAPE) && cursorCaptured) {
+            cursorCaptured = false;
+            GLFW.glfwSetInputMode(window.getWindowHandle(),
+                GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+        }
+        if (inputHandler.wasMouseLeftClicked() && !cursorCaptured) {
+            cursorCaptured = true;
+            GLFW.glfwSetInputMode(window.getWindowHandle(),
+                GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+            return; // consume the click — don't also break a block
+        }
+
+        // --- Mouse look ---
+        if (cursorCaptured) {
+            float yaw   = camera.getYaw()   + inputHandler.getMouseDeltaX() * MOUSE_SENSITIVITY;
+            float pitch = camera.getPitch() - inputHandler.getMouseDeltaY() * MOUSE_SENSITIVITY;
+            camera.setYaw(yaw);
+            camera.setPitch(pitch);
+        }
+
+        // --- Freecam toggle (edge-triggered on F key) ---
+        boolean fKeyDown = inputHandler.isKeyDown(GLFW.GLFW_KEY_F);
+        if (fKeyDown && !lastFKeyDown) {
+            freecam = !freecam;
+            if (freecam) {
+                // When entering freecam, snap its position to current eye position
+                // so the view doesn't jump.
+                camera.getPosition().set(player.getEyePosition());
+            } else {
+                // When returning to physics, teleport the player feet under the
+                // current freecam position so there's no discontinuity.
+                Vector3f cam = camera.getPosition();
+                player.getBody().getPosition().set(cam.x, cam.y - Player.EYE_HEIGHT, cam.z);
+                player.getBody().getVelocity().set(0, 0, 0);
+            }
+        }
+        lastFKeyDown = fKeyDown;
+
+        // --- Movement ---
+        float yawRad = (float) Math.toRadians(camera.getYaw());
+        float sinYaw = (float) Math.sin(yawRad);
+        float cosYaw = (float) Math.cos(yawRad);
+
+        if (freecam) {
+            // Freecam: direct camera position control, no gravity, Space/Shift for vertical.
+            Vector3f pos = camera.getPosition();
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_W)) { pos.x += cosYaw * FREECAM_SPEED; pos.z += sinYaw * FREECAM_SPEED; }
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_S)) { pos.x -= cosYaw * FREECAM_SPEED; pos.z -= sinYaw * FREECAM_SPEED; }
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_A)) { pos.x += sinYaw * FREECAM_SPEED; pos.z -= cosYaw * FREECAM_SPEED; }
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_D)) { pos.x -= sinYaw * FREECAM_SPEED; pos.z += cosYaw * FREECAM_SPEED; }
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_SPACE))      pos.y += FREECAM_SPEED;
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT)) pos.y -= FREECAM_SPEED;
+        } else {
+            // Physics mode: build a horizontal move direction from WASD, let
+            // Player.update() normalise it and apply walk speed.
+            float moveX = 0, moveZ = 0;
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_W)) { moveX += cosYaw; moveZ += sinYaw; }
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_S)) { moveX -= cosYaw; moveZ -= sinYaw; }
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_A)) { moveX += sinYaw; moveZ -= cosYaw; }
+            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_D)) { moveX -= sinYaw; moveZ += cosYaw; }
+
+            boolean wantsJump = inputHandler.isKeyDown(GLFW.GLFW_KEY_SPACE);
+            player.update(moveX, moveZ, wantsJump, world, DELTA_TIME);
+
+            // Snap camera to player eyes every tick.
+            camera.getPosition().set(player.getEyePosition());
+        }
+
+        // --- Block type selection ---
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_1)) selectedBlock = Block.GRASS;
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_2)) selectedBlock = Block.DIRT;
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_3)) selectedBlock = Block.STONE;
+
+        // --- Raycast ---
+        float pitchRad = (float) Math.toRadians(camera.getPitch());
+        Vector3f lookDir = new Vector3f(
+            (float) (cosYaw * Math.cos(pitchRad)),
+            (float)  Math.sin(pitchRad),
+            (float) (sinYaw * Math.cos(pitchRad))
+        );
+        lastRaycast = RayCaster.cast(camera.getPosition(), lookDir, world, REACH);
+
+        // --- Block interaction (cursor must be captured) ---
+        if (cursorCaptured && lastRaycast.hit()) {
+            if (inputHandler.wasMouseLeftClicked()) {
+                world.setBlock(lastRaycast.blockX(), lastRaycast.blockY(),
+                               lastRaycast.blockZ(), Block.AIR);
+            }
+            if (inputHandler.wasMouseRightClicked()) {
+                int px = lastRaycast.placeX();
+                int py = lastRaycast.placeY();
+                int pz = lastRaycast.placeZ();
+                boolean insidePlayer = !freecam && player.getBody().overlapsBlock(px, py, pz);
+                if (!insidePlayer) {
+                    world.setBlock(px, py, pz, selectedBlock);
+                }
+            }
         }
     }
-}
 
     /**
-     * Renders the current frame: 3D world, block highlight, then HUD.
+     * Renders the current frame: 3D world, block highlight, then 2D HUD.
      */
     private void render() {
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
 
-        // --- 3D world pass ---
         shaderProgram.bind();
         shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
         shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
         world.render(shaderProgram);
 
-        // --- Block highlight (reuses the main shader, still bound) ---
         if (lastRaycast.hit()) {
             blockHighlight.render(shaderProgram,
                 lastRaycast.blockX(), lastRaycast.blockY(), lastRaycast.blockZ());
         }
 
         shaderProgram.unbind();
-
-        // --- 2D HUD pass (uses its own shader internally) ---
         hudRenderer.renderCrosshair();
     }
 

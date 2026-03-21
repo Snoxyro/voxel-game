@@ -48,7 +48,7 @@ decisions, and lessons learned.
 - [x] Phase 0 — Foundation (window, OpenGL context, game loop)
 - [x] Phase 1 — Chunk system and flat world
 - [x] Phase 2 — World generation
-- [ ] Phase 3 — Gameplay basics
+- [x] Phase 3 — Gameplay basics
 - [ ] Phase 4 — Performance optimization
 - [ ] Phase 5 — Multiplayer
 - [ ] Phase 6 — Modding API
