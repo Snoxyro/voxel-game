@@ -32,6 +32,62 @@ public class World {
     }
 
     /**
+     * Returns the block at the given world-space coordinates.
+     * Returns {@link Block#AIR} if the coordinates fall outside any loaded chunk.
+     *
+     * <p>Uses {@code Math.floorDiv} and {@code Math.floorMod} rather than {@code /}
+     * and {@code %} so that negative world coordinates resolve to the correct chunk.
+     * For example, world X = -1 belongs to chunk X = -1 (local X = 15), not chunk 0.
+     *
+     * @param worldX world-space X coordinate
+     * @param worldY world-space Y coordinate
+     * @param worldZ world-space Z coordinate
+     * @return the block at that position, or {@link Block#AIR} if unloaded
+     */
+    public Block getBlock(int worldX, int worldY, int worldZ) {
+        int cx = Math.floorDiv(worldX, Chunk.SIZE);
+        int cy = Math.floorDiv(worldY, Chunk.SIZE);
+        int cz = Math.floorDiv(worldZ, Chunk.SIZE);
+        Chunk chunk = chunks.get(new ChunkPos(cx, cy, cz));
+        if (chunk == null) return Block.AIR;
+        return chunk.getBlock(
+            Math.floorMod(worldX, Chunk.SIZE),
+            Math.floorMod(worldY, Chunk.SIZE),
+            Math.floorMod(worldZ, Chunk.SIZE)
+        );
+    }
+
+    /**
+     * Sets the block at the given world-space coordinates and immediately
+     * rebuilds the mesh for the affected chunk.
+     * Does nothing if the coordinates fall outside any loaded chunk.
+     *
+     * <p>Note: faces on chunk boundaries are not yet neighbour-aware — a block
+     * placed or removed on a chunk edge may leave visible seam artefacts on the
+     * adjacent chunk until Phase 4 adds neighbour-aware meshing.
+     *
+     * @param worldX world-space X coordinate
+     * @param worldY world-space Y coordinate
+     * @param worldZ world-space Z coordinate
+     * @param block  the block type to place (use {@link Block#AIR} to remove)
+     */
+    public void setBlock(int worldX, int worldY, int worldZ, Block block) {
+        int cx = Math.floorDiv(worldX, Chunk.SIZE);
+        int cy = Math.floorDiv(worldY, Chunk.SIZE);
+        int cz = Math.floorDiv(worldZ, Chunk.SIZE);
+        ChunkPos pos = new ChunkPos(cx, cy, cz);
+        Chunk chunk = chunks.get(pos);
+        if (chunk == null) return;
+        chunk.setBlock(
+            Math.floorMod(worldX, Chunk.SIZE),
+            Math.floorMod(worldY, Chunk.SIZE),
+            Math.floorMod(worldZ, Chunk.SIZE),
+            block
+        );
+        rebuildMesh(pos);
+    }
+
+    /**
      * Renders all loaded chunks using the provided shader.
      * The shader must be bound before calling this.
      * Sets the modelMatrix uniform for each chunk to translate it

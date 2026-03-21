@@ -336,7 +336,117 @@ learned. Includes honest notes on AI assistance — what worked, what didn't.
   as multi-chunk cliffs and valleys rather than shallow steps
 - The 3D chunk grid means future features (caves, dungeons, floating islands, sky
   limit removal) all come for free with no further architectural changes
-```
+
+---
+
+## Entry 009 — Block Interaction, Highlight, and HUD
+**Date:** 21.03.2026
+**Phase:** 3 — Gameplay Basics
+
+### What Was Done
+- Implemented `RaycastResult.java` — immutable record carrying hit/miss state,
+  struck block coordinates, and face normal. `placeX/Y/Z()` helpers compute the
+  adjacent placement position from the face normal.
+- Implemented `RayCaster.java` — DDA (Digital Differential Analyzer) algorithm
+  that steps a ray through the voxel grid one block boundary at a time. Records
+  the last axis crossed to derive the face normal for free.
+- Added `getBlock(worldX, worldY, worldZ)` and `setBlock(worldX, worldY, worldZ, Block)`
+  to `World.java`. Both use `Math.floorDiv` / `Math.floorMod` to correctly resolve
+  negative world coordinates to chunk and local positions.
+- Implemented `BlockHighlightRenderer.java` — wireframe cube outline rendered with
+  `GL_LINES` around the targeted block. Expanded slightly beyond block bounds to
+  prevent z-fighting. Reuses the main 3D shader.
+- Implemented `HudRenderer.java` — 2D screen-space crosshair rendered with a
+  dedicated HUD shader that bypasses the MVP pipeline entirely (NDC coordinates
+  direct). Aspect ratio compensated for 16:9.
+- Added `hud.vert` and `hud.frag` shaders under `src/main/resources/shaders/`.
+- Added mouse button edge detection to `InputHandler.java` — `wasMouseLeftClicked()`
+  and `wasMouseRightClicked()` fire only on the frame the button transitions down,
+  preventing hold-to-rapid-fire behavior.
+- Wired all systems into `GameLoop`: raycast each update tick, left click breaks
+  the targeted block, right click places the selected block on the struck face.
+- Block type selection via keys 1 (GRASS), 2 (DIRT), 3 (STONE).
+
+### Decisions Made
+- DDA preferred over fixed-step ray marching — exact boundary crossings, no
+  block-skip artifacts at steep angles, and face normal comes out of the algorithm
+  for free with no extra work.
+- `wasMouseLeftClicked()` / `wasMouseRightClicked()` are edge-triggered, not
+  level-triggered — holding a mouse button should not continuously modify the world.
+  Continuous break/place is a gameplay decision deferred to later.
+- Block highlight reuses the main shader rather than a dedicated one — the
+  interleaved vertex format is identical, only the draw primitive changes
+  (GL_LINES vs GL_TRIANGLES).
+- HUD uses its own shader with no uniforms and no MVP transform — HUD geometry
+  is authored directly in NDC, the simplest possible approach for a static overlay.
+- `Math.floorDiv` / `Math.floorMod` used throughout world coordinate resolution —
+  Java's `/` truncates toward zero, which maps world X=-1 to chunk 0 incorrectly.
+  Floor division is the correct semantic for voxel grids.
+
+### Problems Encountered
+- None. All systems worked on first run.
+
+### AI Assistance Notes
+- Claude wrote all new files with concept explanations for DDA, NDC coordinates,
+  and edge-triggered input detection.
+- `Math.floorDiv` / `Math.floorMod` distinction flagged proactively — a silent
+  correctness bug that would only surface when the player moves into negative
+  world coordinates.
+
+### Lessons / Observations
+- DDA is satisfying to understand — the "always jump to the nearest boundary"
+  insight makes it feel inevitable once explained.
+- The face normal falling out of DDA for free (recording which axis was last
+  crossed) is an elegant property of the algorithm.
+- Known limitation: breaking or placing a block on a chunk boundary does not
+  update the adjacent chunk's mesh. The seam face remains until Phase 4 adds
+  neighbour-aware mesh rebuilding.
+
+---
+
+## Entry 010 — Cursor Toggle and Window Resize
+**Date:** 21.03.2026
+**Phase:** 3 — Gameplay Basics
+
+### What Was Done
+- Escape now toggles cursor release instead of closing the window. Left-clicking
+  the window re-captures the cursor. The re-capture click is consumed and does
+  not fire a block break.
+- Added `GLFWFramebufferSizeCallback` to `Window.java` — updates the GL viewport
+  immediately when the window is resized. Actual framebuffer size queried at init
+  via `glfwGetFramebufferSize` for correct HiDPI handling.
+- `Window` now exposes `getFramebufferWidth()` / `getFramebufferHeight()`.
+- `Camera.setAspectRatio(width, height)` added — aspect ratio is no longer baked
+  at construction time. `GameLoop` compares framebuffer dimensions each tick and
+  calls this only when a change is detected.
+- Camera mouse look and block interaction both gated behind `cursorCaptured` flag.
+
+### Decisions Made
+- Cursor toggle on Escape is standard for PC games — gives the player OS access
+  without closing the application.
+- Aspect ratio re-checked every tick via integer comparison — effectively free,
+  and simpler than a callback chain that would need to cross the window/camera
+  boundary.
+- Framebuffer size used instead of logical window size — on HiDPI displays these
+  differ, and the framebuffer size is what the GL viewport must match.
+
+### Problems Encountered
+- None.
+
+### Known Issue (deferred)
+- Rendering freezes while the window border is actively being dragged. This is
+  the same Windows modal loop behavior noted in Entry 002. The main thread is
+  blocked by the OS during the drag operation, causing a UPS/FPS spike on
+  release. Fixing this requires platform-specific workarounds or render thread
+  restructuring — deferred to Phase 4.
+
+### AI Assistance Notes
+- Claude wrote all changes.
+
+### Lessons / Observations
+- `GLFWFramebufferSizeCallback` must be held in a field — if it goes out of
+  scope and gets garbage collected, GLFW will crash calling into a freed native
+  pointer. A subtle Java/native interop hazard.
 
 ---
 

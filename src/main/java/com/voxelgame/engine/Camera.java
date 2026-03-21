@@ -7,7 +7,7 @@ import org.joml.Vector3f;
  * Represents the player's camera. Maintains position and orientation,
  * and produces the view and projection matrices used by the renderer.
  *
- * Orientation is described with Euler angles (yaw and pitch).
+ * <p>Orientation is described with Euler angles (yaw and pitch).
  * Yaw rotates left/right around the Y axis.
  * Pitch tilts up/down around the X axis.
  */
@@ -26,19 +26,36 @@ public class Camera {
     /** Vertical rotation in degrees. 0 is level, positive tilts upward. */
     private float pitch;
 
-    private final float aspectRatio;
+    /**
+     * Aspect ratio (width / height). Mutable so the projection matrix updates
+     * correctly when the window is resized.
+     */
+    private float aspectRatio;
 
     /**
      * Creates a camera positioned slightly behind the origin, facing forward.
      *
-     * @param windowWidth  the window width in pixels, used for aspect ratio
-     * @param windowHeight the window height in pixels, used for aspect ratio
+     * @param windowWidth  the initial window width in pixels
+     * @param windowHeight the initial window height in pixels
      */
     public Camera(int windowWidth, int windowHeight) {
         this.aspectRatio = (float) windowWidth / windowHeight;
-        this.position    = new Vector3f(0.0f, 0.0f, 3.0f); // 3 units back from origin
-        this.yaw         = -90.0f; // face -Z so we're looking at the scene
-        this.pitch       = 0.0f;
+        this.position    = new Vector3f(0.0f, 0.0f, 3.0f);
+        this.yaw         = -90.0f;
+        this.pitch        = 0.0f;
+    }
+
+    /**
+     * Updates the aspect ratio used by the projection matrix.
+     * Call this whenever the window is resized.
+     *
+     * @param width  new framebuffer width in pixels
+     * @param height new framebuffer height in pixels
+     */
+    public void setAspectRatio(int width, int height) {
+        if (height > 0) {
+            this.aspectRatio = (float) width / height;
+        }
     }
 
     /**
@@ -48,25 +65,23 @@ public class Camera {
      * @return the view matrix
      */
     public Matrix4f getViewMatrix() {
-        // Convert yaw/pitch to a direction vector the camera is facing.
-        // This is the standard spherical-to-cartesian conversion for a look direction.
         float yawRad   = (float) Math.toRadians(yaw);
         float pitchRad = (float) Math.toRadians(pitch);
 
         Vector3f direction = new Vector3f(
             (float) (Math.cos(yawRad) * Math.cos(pitchRad)),
-            (float) (Math.sin(pitchRad)),
+            (float)  Math.sin(pitchRad),
             (float) (Math.sin(yawRad) * Math.cos(pitchRad))
         ).normalize();
 
-        // lookAt: camera position, the point it's aimed at, world up direction
         Vector3f target = new Vector3f(position).add(direction);
         return new Matrix4f().lookAt(position, target, new Vector3f(0.0f, 1.0f, 0.0f));
     }
 
     /**
-     * Builds and returns the projection matrix — creates perspective and fixes aspect ratio.
-     * Only changes if the window is resized (not handled yet).
+     * Builds and returns the projection matrix — creates perspective and fixes
+     * aspect ratio. Uses the most recently set aspect ratio, so it responds
+     * correctly to window resizes.
      *
      * @return the projection matrix
      */
@@ -83,15 +98,11 @@ public class Camera {
     /** @return pitch angle in degrees */
     public float getPitch() { return pitch; }
 
-    /**
-     * Sets the camera's yaw (left/right rotation).
-     * @param yaw degrees
-     */
+    /** @param yaw degrees */
     public void setYaw(float yaw) { this.yaw = yaw; }
 
     /**
-     * Sets the camera's pitch (up/down tilt).
-     * Clamped to ±89° to prevent gimbal flip at straight up/down.
+     * Sets the camera's pitch. Clamped to ±89° to prevent gimbal flip.
      *
      * @param pitch degrees
      */
