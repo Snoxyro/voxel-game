@@ -1,9 +1,12 @@
 package com.voxelgame.engine;
 
+import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.system.MemoryStack;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.FloatBuffer;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -81,6 +84,28 @@ public class ShaderProgram {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new RuntimeException("Failed to read shader resource: " + path, e);
+        }
+    }
+
+    /**
+     * Sets a mat4 uniform variable in the shader program.
+     * The program must be bound before calling this.
+     *
+     * @param name   the uniform variable name as declared in GLSL
+     * @param matrix the JOML matrix to upload
+     */
+    public void setUniform(String name, Matrix4f matrix) {
+        int location = GL20.glGetUniformLocation(programId, name);
+        if (location == -1) {
+            System.err.println("Warning: uniform '" + name + "' not found in shader program.");
+            return;
+        }
+        // MemoryStack gives us a temporary off-heap buffer scoped to this try block.
+        // It's fast and doesn't require manual free — the stack rewinds on close.
+        try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            FloatBuffer buffer = stack.mallocFloat(16);
+            matrix.get(buffer);
+            GL20.glUniformMatrix4fv(location, false, buffer);
         }
     }
 

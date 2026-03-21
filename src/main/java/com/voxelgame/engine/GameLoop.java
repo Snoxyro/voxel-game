@@ -11,6 +11,7 @@ public class GameLoop {
     private static final int TARGET_UPS = 60;
 
     private final Window window;
+    private Camera camera;
     private ShaderProgram shaderProgram;
     private Mesh triangleMesh;
 
@@ -37,6 +38,7 @@ public class GameLoop {
      */
     private void init() {
         window.init();
+        camera = new Camera(1280, 720);
 
         // Triangle vertex positions in NDC (Normalized Device Coordinates):
         // OpenGL's coordinate space goes from -1.0 to +1.0 on both axes.
@@ -107,6 +109,9 @@ public class GameLoop {
         shaderProgram.bind();
         triangleMesh.render();
         shaderProgram.unbind();
+
+        shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
+        shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
     }
 
     /**
