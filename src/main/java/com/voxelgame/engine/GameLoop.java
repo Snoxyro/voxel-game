@@ -8,9 +8,11 @@ import org.lwjgl.opengl.GL11;
  */
 public class GameLoop {
 
-    private static final int TARGET_UPS = 60; // Updates (logic ticks) per second
+    private static final int TARGET_UPS = 60;
 
     private final Window window;
+    private ShaderProgram shaderProgram;
+    private Mesh triangleMesh;
 
     /**
      * Constructs the GameLoop and its owned subsystems.
@@ -35,31 +37,40 @@ public class GameLoop {
      */
     private void init() {
         window.init();
+
+        // Triangle vertex positions in NDC (Normalized Device Coordinates):
+        // OpenGL's coordinate space goes from -1.0 to +1.0 on both axes.
+        // (0, 0) is the center of the screen.
+        // These three points form a triangle centered on screen.
+        float[] vertices = {
+             0.0f,  0.5f, 0.0f,  // top center
+            -0.5f, -0.5f, 0.0f,  // bottom left
+             0.5f, -0.5f, 0.0f   // bottom right
+        };
+
+        triangleMesh  = new Mesh(vertices);
+        shaderProgram = new ShaderProgram("/shaders/default.vert", "/shaders/default.frag");
+
         System.out.println("Engine initialized. OpenGL context active.");
     }
 
     /**
      * The main loop. Runs until the window is closed.
-     * Tracks and prints FPS and UPS to stdout every second.
      */
     private void loop() {
-        // Time tracking for the fixed update step
-        double previousTime = System.currentTimeMillis();
-        double updateInterval = 1000.0 / TARGET_UPS; // milliseconds per update tick
-        double accumulator = 0.0;
-
-        // FPS/UPS counters for diagnostics
-        int frames = 0;
-        int updates = 0;
+        double previousTime    = System.currentTimeMillis();
+        double updateInterval  = 1000.0 / TARGET_UPS;
+        double accumulator     = 0.0;
+        int    frames          = 0;
+        int    updates         = 0;
         double diagnosticTimer = System.currentTimeMillis();
 
         while (!window.shouldClose()) {
             double currentTime = System.currentTimeMillis();
-            double elapsed = currentTime - previousTime;
-            previousTime = currentTime;
-            accumulator += elapsed;
+            double elapsed     = currentTime - previousTime;
+            previousTime       = currentTime;
+            accumulator       += elapsed;
 
-            // Process as many fixed-rate logic ticks as the elapsed time demands
             while (accumulator >= updateInterval) {
                 update();
                 updates++;
@@ -69,11 +80,10 @@ public class GameLoop {
             render();
             frames++;
 
-            // Print diagnostics once per second
             if (System.currentTimeMillis() - diagnosticTimer >= 1000.0) {
                 System.out.printf("FPS: %d | UPS: %d%n", frames, updates);
-                frames = 0;
-                updates = 0;
+                frames          = 0;
+                updates         = 0;
                 diagnosticTimer = System.currentTimeMillis();
             }
 
@@ -82,25 +92,29 @@ public class GameLoop {
     }
 
     /**
-     * Game logic update — called TARGET_UPS times per second regardless of frame rate.
-     * Empty for now. Physics, input, and simulation will live here.
+     * Game logic update — called TARGET_UPS times per second.
      */
     private void update() {
-        // Nothing to update yet
+        // Nothing yet
     }
 
     /**
-     * Render the current frame. Clears the screen for now.
-     * Draw calls will be added here in Phase 0.
+     * Renders the current frame.
      */
     private void render() {
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+
+        shaderProgram.bind();
+        triangleMesh.render();
+        shaderProgram.unbind();
     }
 
     /**
      * Shuts down all engine subsystems in reverse initialization order.
      */
     private void cleanup() {
+        triangleMesh.cleanup();
+        shaderProgram.cleanup();
         window.cleanup();
         System.out.println("Engine shut down cleanly.");
     }
