@@ -585,17 +585,16 @@ public class World {
      */
     private Map<ChunkPos, Chunk> captureNeighbors(ChunkPos pos) {
         Map<ChunkPos, Chunk> neighbors = new HashMap<>();
-        ChunkPos[] adjacent = {
-            new ChunkPos(pos.x() - 1, pos.y(), pos.z()),
-            new ChunkPos(pos.x() + 1, pos.y(), pos.z()),
-            new ChunkPos(pos.x(), pos.y() - 1, pos.z()),
-            new ChunkPos(pos.x(), pos.y() + 1, pos.z()),
-            new ChunkPos(pos.x(), pos.y(), pos.z() - 1),
-            new ChunkPos(pos.x(), pos.y(), pos.z() + 1),
-        };
-        for (ChunkPos n : adjacent) {
-            Chunk c = chunks.get(n);
-            if (c != null) neighbors.put(n, c);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) continue;
+
+                    ChunkPos neighborPos = new ChunkPos(pos.x() + dx, pos.y() + dy, pos.z() + dz);
+                    Chunk neighbor = chunks.get(neighborPos);
+                    if (neighbor != null) neighbors.put(neighborPos, neighbor);
+                }
+            }
         }
         return neighbors;
     }

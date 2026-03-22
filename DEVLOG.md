@@ -1376,6 +1376,44 @@ and the mesher needs a fallback per-block path for non-full blocks.
 
 ---
 
+## Entry 029 — Ambient Occlusion
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+### What Was Done
+
+- Rewrote `ChunkMesher.java` with per-vertex ambient occlusion baked into vertex colors at mesh-build time. Zero runtime cost — all darkening happens on the worker thread during mesh generation.
+- Expanded `captureNeighbors()` in `World.java` from 6 face-adjacent chunks to all 26 neighbors (face + edge + corner). Required because AO sampling at chunk-boundary vertices needs diagonal neighbor chunks.
+- AO uses the canonical 3-sample formula per vertex: side1, side2, corner. When both sides are solid, corner is irrelevant (fully occluded). Values range 0–3.
+- Mask encoding extended from 3 bits (block type only) to 11 bits (block type + 4×2-bit AO values). Greedy merge condition now implicitly enforces AO matching — two cells only merge when block type AND all four vertex AO values are identical.
+- Diagonal flip implemented in `emitQuad`: when `ao0 + ao2 < ao1 + ao3`, the triangle split is flipped to prevent interpolation anisotropy artifacts. Condition is inverted relative to the 0fps.net reference formula because our vertex winding is CCW, not CW.
+- Per-direction shading split into six constants (TOP, BOTTOM, NORTH, SOUTH, EAST, WEST) simulating a sun angle from the south-east, replacing the single SHADE_SIDE value.
+- Two separate AO strength constants: `AO_STRENGTH_TOP = 0.75f`, `AO_STRENGTH_SIDE = 0.60f`
+
+### Decisions Made
+
+- Top-face AO is nearly disabled. On 1-block-high staircase terrain, top-face AO produces dark stripes perpendicular to the slope direction — an artifact of correct AO values on repeating 1-block geometry. Side-face AO is unaffected and looks correct.
+- Six directional shade values replace one SHADE_SIDE constant. Gives terrain large-scale natural depth that doesn't produce per-block boundary artifacts.
+- `AO_STRENGTH_TOP` and `AO_STRENGTH_SIDE` are separate tunable constants at the top of `ChunkMesher` — easy to adjust when textures arrive.
+
+### Problems Encountered
+
+- Initial `emitQuad` flipped branch emitted vertices in an order incompatible with `Mesh.java`'s fixed deduplication logic (extracts unique verts from positions 0,1,2,5). Fixed by emitting `[v1,v2,v3,v1,v3,v0]` for the flipped case instead of `[v0,v1,v3,v1,v2,v3]`.
+- Diagonal flip condition was inverted relative to the 0fps.net reference. Root cause: reference formula assumes CW vertex ordering; our winding is CCW. Inverting `>` to `<` corrected shadow orientation.
+
+### AI Assistance Notes
+
+- Claude implemented the full AO system, `captureNeighbors` expansion, and directional shading.
+- Mesh.java compatibility bug in the flipped branch caught and fixed by Claude from a screenshot.
+- Diagonal flip condition was wrong (shadow stripes perpendicular to slope). Gemini identified the fix — invert the operator. Claude had incorrectly concluded the stripes were unsolvable, which was wrong.
+
+### Lessons / Observations
+
+- The CCW vs CW winding difference is exactly the kind of subtle assumption mismatch that causes correct-looking code to produce wrong results. Reference formulas should always be checked for coordinate system and winding assumptions.
+- Vertex AO on flat-color terrain exposes interpolation artifacts that textures will naturally hide. The current result is a correct baseline that will look significantly better once textures are added.
+- Two AI tools gave contradictory answers on the same problem. The correct answer came from trying the simpler fix first.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 
