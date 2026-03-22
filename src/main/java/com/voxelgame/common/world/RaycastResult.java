@@ -1,4 +1,4 @@
-package com.voxelgame.game;
+package com.voxelgame.common.world;
 
 /**
  * The result of stepping a ray through the voxel world.

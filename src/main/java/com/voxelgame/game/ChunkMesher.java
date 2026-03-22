@@ -1,5 +1,8 @@
 package com.voxelgame.game;
 
+import com.voxelgame.common.world.Block;
+import com.voxelgame.common.world.Chunk;
+import com.voxelgame.common.world.ChunkPos;
 import java.util.Arrays;
 import java.util.Map;
 

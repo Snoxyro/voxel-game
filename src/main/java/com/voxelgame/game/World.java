@@ -1,5 +1,8 @@
 package com.voxelgame.game;
 
+import com.voxelgame.common.world.Block;
+import com.voxelgame.common.world.Chunk;
+import com.voxelgame.common.world.ChunkPos;
 import com.voxelgame.engine.Mesh;
 import com.voxelgame.engine.ShaderProgram;
 import org.joml.FrustumIntersection;

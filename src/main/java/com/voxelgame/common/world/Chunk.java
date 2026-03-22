@@ -1,4 +1,4 @@
-package com.voxelgame.game;
+package com.voxelgame.common.world;
 
 /**
  * Represents a fixed-size 3D chunk of blocks.

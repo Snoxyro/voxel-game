@@ -1,5 +1,6 @@
-package com.voxelgame.game;
+package com.voxelgame.common.world;
 
+import com.voxelgame.game.World;
 import org.joml.Vector3f;
 
 /**

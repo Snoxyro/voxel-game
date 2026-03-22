@@ -1,5 +1,8 @@
 package com.voxelgame.game;
 
+import com.voxelgame.common.world.Block;
+import com.voxelgame.common.world.Chunk;
+import com.voxelgame.common.world.ChunkPos;
 import com.voxelgame.util.OpenSimplex2S;
 
 import java.util.concurrent.ConcurrentHashMap;

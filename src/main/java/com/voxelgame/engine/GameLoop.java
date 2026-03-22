@@ -4,10 +4,10 @@ import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 
-import com.voxelgame.game.Block;
+import com.voxelgame.common.world.Block;
+import com.voxelgame.common.world.RayCaster;
+import com.voxelgame.common.world.RaycastResult;
 import com.voxelgame.game.Player;
-import com.voxelgame.game.RayCaster;
-import com.voxelgame.game.RaycastResult;
 import com.voxelgame.game.World;
 
 /**

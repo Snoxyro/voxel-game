@@ -49,6 +49,6 @@ decisions, and lessons learned.
 - [x] Phase 1 — Chunk system and flat world
 - [x] Phase 2 — World generation
 - [x] Phase 3 — Gameplay basics
-- [ ] Phase 4 — Performance optimization
+- [x] Phase 4 — Performance optimization
 - [ ] Phase 5 — Multiplayer
 - [ ] Phase 6 — Modding API

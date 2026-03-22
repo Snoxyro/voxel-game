@@ -1454,6 +1454,125 @@ and the mesher needs a fallback per-block path for non-full blocks.
 - Procedurally generated placeholder textures are underrated for early development. No file management, always reproducible, trivial to swap for real art later.
 
 ---
+ 
+## Phase 5 — Multiplayer Architecture Plan
+**Date:** 22.03.2026 (Planning session)
+**Phase:** 5 — Multiplayer
+ 
+### Design Goals
+- Singleplayer = embedded server on localhost. No separate singleplayer code path.
+- Server is headless and portable: zip the world folder, upload to any machine, run `ServerMain`. Connect from client with IP:port.
+- Movement is smooth. Client-side prediction with server reconciliation is the target. Deferred to Phase 5D — simpler sync first.
+- Server is authoritative. Client handles rendering only.
+ 
+### Architectural Decisions (Locked)
+ 
+**Package restructure:**
+```
+com.voxelgame.
+├── Main.java                        ← singleplayer: launches embedded server + client
+├── common/
+│   ├── world/
+│   │   ├── Block.java               ← moved from game/
+│   │   ├── Chunk.java               ← moved from game/
+│   │   ├── ChunkPos.java            ← moved from game/
+│   │   └── PhysicsBody.java         ← moved from game/
+│   └── network/
+│       ├── PacketId.java            ← all packet IDs, shared by client + server
+│       └── packets/                 ← all packet types as Java records
+├── server/
+│   ├── ServerMain.java              ← headless dedicated server entry point
+│   ├── GameServer.java              ← 20 TPS server game loop
+│   ├── PlayerSession.java           ← per-client state: position, loaded chunks, queue
+│   ├── ServerWorld.java             ← World + chunk persistence (save/load)
+│   └── network/
+│       ├── ServerNetworkManager.java
+│       └── ClientHandler.java
+├── client/
+│   ├── GameClient.java              ← current GameLoop adapted for network
+│   ├── ClientWorld.java             ← chunk storage from received data, no generation
+│   ├── RemotePlayer.java            ← other players with position interpolation
+│   └── network/
+│       ├── ClientNetworkManager.java
+│       └── ServerHandler.java
+└── engine/                          ← unchanged: Mesh, Camera, ShaderProgram, etc.
+```
+ 
+**Network library:** Netty. Handles TCP framing, non-blocking NIO, buffer pooling. One Gradle dependency.
+ 
+**Protocol:** Custom binary TCP. Length-prefixed packets: `[4-byte length][1-byte packet ID][payload]`.
+ 
+**Default port:** 24463 (unassigned by IANA, not used by any known game or service).
+ 
+**Server TPS:** 20 ticks/second. Client runs at 60 UPS — 3 client frames per server tick, a clean multiple.
+ 
+**Authentication:** Offline mode only. Username string, no verification. Online auth deferred indefinitely.
+ 
+### Protocol Packet List
+ 
+**Serverbound (client → server):**
+- `Handshake` — protocol version
+- `LoginRequest` — username
+- `PlayerMove` — x, y, z, yaw, pitch, onGround (sent 20× per second)
+- `BlockBreak` — worldX, worldY, worldZ
+- `BlockPlace` — worldX, worldY, worldZ, blockType
+- `KeepAliveResponse` — echo of server's keepalive id
+ 
+**Clientbound (server → client):**
+- `LoginSuccess` — playerId, spawnX, spawnY, spawnZ
+- `ChunkData` — chunkPos + 4096 bytes (raw block array)
+- `UnloadChunk` — chunkPos
+- `BlockChange` — worldX, worldY, worldZ, blockType
+- `PlayerSpawn` — playerId, username, x, y, z
+- `PlayerMove` — playerId, x, y, z, yaw, pitch
+- `PlayerDespawn` — playerId
+- `KeepAlive` — id
+ 
+### World Persistence — Folder Structure
+```
+worlds/
+└── world_name/
+    ├── world.dat          ← seed, spawn point (binary)
+    └── chunks/
+        └── cx_cy_cz.dat   ← 4096 bytes raw block array, GZIP compressed
+```
+One file per chunk initially. Region files (32×32 chunks packed) deferred to Phase 6 if I/O proves to be a bottleneck.
+ 
+### Phase 5 Roadmap (in order)
+ 
+**5A — Package restructure + Netty + handshake** *(current)*
+Move shared classes to `common/`. Add Netty to build.gradle. Implement ServerNetworkManager and ClientNetworkManager. Implement Handshake + Login packets. Milestone: client connects to server and both log the connection. No gameplay yet.
+ 
+**5B — Chunk streaming**
+Server sends ChunkData packets when chunks enter player range. Client reconstructs Chunk objects and meshes them locally. PlayerSession tracks loaded chunk set per client. Milestone: world renders identically to today but all chunk data arrived over the wire.
+ 
+**5C — Block interaction sync**
+Client sends BlockBreak/BlockPlace. Server validates, updates ServerWorld, broadcasts BlockChange to all clients in range. Milestone: two clients see each other's block edits in real time.
+ 
+**5D — Player movement sync + client-side prediction**
+Client sends PlayerMove every tick. Server broadcasts to other clients in range. RemotePlayer renders other players with position interpolation (smoothes 20Hz updates). Client-side prediction + server reconciliation for local player. Milestone: two clients see each other moving smoothly with no input lag.
+ 
+**5E — World persistence**
+Server saves modified chunks to disk. Server loads saved chunks before generating. World folder selectable at launch. Milestone: break blocks, restart server, blocks remain.
+ 
+**5F — Singleplayer integration**
+Main.java launches embedded GameServer + GameClient on the same JVM. ServerMain.java for dedicated server mode. Milestone: `./gradlew run` = singleplayer, `./gradlew runServer` = dedicated server.
+ 
+### Future Considerations (not planned, not blocked)
+- **Online authentication:** Offline mode is permanent until a public release is considered. If implemented, it would sit between Handshake and Login as a separate protocol state.
+- **Claims / protected areas:** Per-area permission system allowing specific players or groups to have build/break rights over a region. Only worth implementing after authentication exists.
+- **Commands and permissions:** Server command system with permission levels (owner, admin, player). Pairs naturally with claims.
+- **Region files:** Packing 32×32 chunks into a single file (Minecraft's .mca format). Deferred to Phase 6 if one-file-per-chunk proves slow at large render distances.
+ 
+### Notes for Future Claude Sessions
+- `World.java` update() was always designed with a `Collection<Vector3f>` viewer positions upgrade in mind — the seam is the `world.update()` call in GameLoop.
+- `ChunkMesher` is stateless and thread-safe — stays on the client, meshing chunks received from the server. No changes needed.
+- `TerrainGenerator` moves entirely to the server. The client never generates terrain.
+- `PhysicsBody` stays in `common/` — both client (local player prediction) and server (authoritative physics) will use the same class.
+- OpenGL rule unchanged: all GL calls remain on the client main thread. Server has zero GL dependency and zero LWJGL imports.
+- `RayCaster` and `RaycastResult` stay in `common/` — server needs them for block interaction validation.
+
+---
 
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:

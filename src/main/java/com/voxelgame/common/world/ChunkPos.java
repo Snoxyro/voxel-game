@@ -1,4 +1,4 @@
-package com.voxelgame.game;
+package com.voxelgame.common.world;
 
 /**
  * Identifies a chunk by its 3D position in the world grid.

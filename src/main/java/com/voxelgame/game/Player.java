@@ -1,5 +1,6 @@
 package com.voxelgame.game;
 
+import com.voxelgame.common.world.PhysicsBody;
 import org.joml.Vector3f;
 
 /**

@@ -1,4 +1,4 @@
-package com.voxelgame.game;
+package com.voxelgame.common.world;
 
 import com.voxelgame.engine.TextureManager;
 
