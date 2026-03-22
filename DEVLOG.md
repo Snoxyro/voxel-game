@@ -790,6 +790,73 @@ quads need tiling UVs.
 
 ---
 
+## Entry 017 — Chunk Streaming
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Replaced fixed 8×5×8 chunk grid with dynamic streaming. World.update(px, py, pz)
+  is called every tick and drives load/unload based on viewer position.
+- Terrain generation runs on a dedicated daemon background thread. The main thread
+  drains a ConcurrentLinkedQueue each tick and handles GPU upload and neighbor rebuilds.
+- Chunks are generated in distance order (closest first) for better pop-in experience.
+- Horizontal load area is circular (not square) to avoid generating unnecessary corner chunks.
+- Chunks below cy=0 are skipped — terrain never exists below world y=0.
+- World constructor now accepts a seed — TerrainGenerator ownership moved from
+  GameLoop into World (server-side concern).
+- RENDER_DISTANCE_H = 16 chunks, RENDER_DISTANCE_V = 4 chunks. Both are named
+  constants at the top of World.java.
+
+### Decisions Made
+- Worker thread does terrain generation only — no GL calls, no world queries.
+  Meshing and GPU upload remain on the main thread. This is safe with no
+  synchronization beyond the ConcurrentLinkedQueue handoff.
+- world.update() accepts a single viewer position for now. When multiplayer is
+  added, this becomes a Collection<Vector3f> — one position per connected player.
+  World is server-side logic; GameLoop will become the client-side rendering loop.
+  The seam is the world.update() call in GameLoop.
+- Single executor thread now, thread pool later. The upgrade path is changing
+  newSingleThreadExecutor to newFixedThreadPool(N) — no other changes needed,
+  since ChunkMesher.mesh() is not called on the worker thread (it reads from World
+  which isn't thread-safe yet).
+
+### Problems Encountered
+- None on first run.
+
+### AI Assistance Notes
+- Claude wrote World.java. GameLoop changes were surgical (3 lines).
+
+### Lessons / Observations
+- Sorting generation tasks by distance before submission gives noticeably better
+  pop-in behavior — ground chunks appear before distant terrain.
+- Chunks that go out of range while being generated are discarded on drain rather
+  than uploaded — avoids a ghost chunk appearing briefly before the next unload pass.
+- rebuildNeighbors() on unload is necessary — without it, neighbors keep their
+  old meshes which suppressed boundary faces that are now exposed.
+
+---
+
+## Entry 018 — Streaming Fixes
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Capped chunk uploads to MAX_CHUNK_UPLOADS_PER_FRAME = 2 per tick in
+  drainPendingChunks(). Eliminates frame hitches caused by multiple simultaneous
+  mesh rebuilds when many chunks finish generating at once.
+- Raised RENDER_DISTANCE_V from 4 to 6 chunks (96 blocks). The previous value
+  caused terrain to unload when flying ~70 blocks above spawn.
+
+### Decisions Made
+- Upload cap is a constant — tunable if 2 feels too slow to load in.
+- The real fix for hitches is moving ChunkMesher.mesh() to the worker thread,
+  which requires thread-safe world reads. Deferred to the thread pool upgrade.
+
+### Problems Encountered
+- Vertical unload was reachable in normal freecam usage — not an edge case.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

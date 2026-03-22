@@ -5,11 +5,9 @@ import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 
 import com.voxelgame.game.Block;
-import com.voxelgame.game.ChunkPos;
 import com.voxelgame.game.Player;
 import com.voxelgame.game.RayCaster;
 import com.voxelgame.game.RaycastResult;
-import com.voxelgame.game.TerrainGenerator;
 import com.voxelgame.game.World;
 
 /**
@@ -113,16 +111,7 @@ public class GameLoop {
         inputHandler = new InputHandler(window.getWindowHandle());
         inputHandler.init();
 
-        world = new World();
-        TerrainGenerator generator = new TerrainGenerator(12345L);
-        for (int cx = 0; cx < 8; cx++) {
-            for (int cz = 0; cz < 8; cz++) {
-                for (int cy = 0; cy < 5; cy++) {
-                    ChunkPos pos = new ChunkPos(cx, cy, cz);
-                    world.addChunk(pos, generator.generateChunk(pos));
-                }
-            }
-        }
+        world = new World(12345L);
 
         player = new Player(SPAWN_X, SPAWN_Y, SPAWN_Z);
 
@@ -193,6 +182,9 @@ public class GameLoop {
      * Game logic update — called TARGET_UPS times per second.
      */
     private void update() {
+        // Stream chunks around the viewer — works in both physics and freecam mode
+        world.update(camera.getPosition().x, camera.getPosition().y, camera.getPosition().z);
+
         inputHandler.update();
 
         // --- Window resize ---
