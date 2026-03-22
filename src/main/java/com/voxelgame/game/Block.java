@@ -1,5 +1,7 @@
 package com.voxelgame.game;
 
+import com.voxelgame.engine.TextureManager;
+
 /**
  * Represents a block type. AIR means empty space — no geometry is emitted for it.
  * Each solid block type declares its base RGB color used during mesh generation.
@@ -11,17 +13,44 @@ public enum Block {
     STONE;
 
     /**
-     * Returns the base RGB color for this block as a float[3] (values 0.0–1.0).
-     * AIR has no color — it is never rendered.
+     * Returns the texture array layer index for this block's top face.
      *
-     * @return float array [r, g, b]
+     * @return texture array layer index for the top face
      */
-    public float[] color() {
+    public int topTextureLayer() {
         return switch (this) {
-            case GRASS -> new float[]{ 0.3f, 0.7f, 0.2f };
-            case DIRT  -> new float[]{ 0.5f, 0.35f, 0.1f };
-            case STONE -> new float[]{ 0.5f, 0.5f, 0.5f };
-            case AIR   -> new float[]{ 0.0f, 0.0f, 0.0f };
+            case GRASS -> TextureManager.LAYER_GRASS_TOP;
+            case DIRT  -> TextureManager.LAYER_DIRT;
+            case STONE -> TextureManager.LAYER_STONE;
+            case AIR   -> 0;
+        };
+    }
+
+    /**
+     * Returns the texture array layer index for this block's side faces (N/S/E/W).
+     *
+     * @return texture array layer index for the side faces
+     */
+    public int sideTextureLayer() {
+        return switch (this) {
+            case GRASS -> TextureManager.LAYER_GRASS_SIDE;
+            case DIRT  -> TextureManager.LAYER_DIRT;
+            case STONE -> TextureManager.LAYER_STONE;
+            case AIR   -> 0;
+        };
+    }
+
+    /**
+     * Returns the texture array layer index for this block's bottom face.
+     *
+     * @return texture array layer index for the bottom face
+     */
+    public int bottomTextureLayer() {
+        return switch (this) {
+            case GRASS -> TextureManager.LAYER_DIRT;
+            case DIRT  -> TextureManager.LAYER_DIRT;
+            case STONE -> TextureManager.LAYER_STONE;
+            case AIR   -> 0;
         };
     }
 }

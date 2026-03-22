@@ -1414,6 +1414,47 @@ and the mesher needs a fallback per-block path for non-full blocks.
 
 ---
 
+## Entry 030 — Textures with GL_TEXTURE_2D_ARRAY
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+
+- Added `TextureManager.java` — generates a `GL_TEXTURE_2D_ARRAY` with one 16×16 RGBA tile per block face type (grass top, grass side, dirt, stone). Textures are generated procedurally at startup using deterministic integer hashing — reproducible every run, no external files required.
+- Updated `default.vert` — added `texCoord` (vec2, location 2) and `texLayer` (float, location 3) attributes. Fragment shader receives them packed as `vec3 fragTexCoord`.
+- Updated `default.frag` — samples `sampler2DArray` and multiplies by `vertColor` for AO/directional shading. Added `useTexture` bool uniform so the block highlight wireframe can skip texture sampling without a separate shader.
+- Updated `Mesh.java` — vertex format expanded from 6 to 9 floats per vertex (`[x,y,z,r,g,b,u,v,layer]`). Added attribute pointers for locations 2 and 3.
+- Updated `Block.java` — added `topTextureLayer()`, `sideTextureLayer()`, `bottomTextureLayer()` methods referencing `TextureManager` layer constants.
+- Updated `ShaderProgram.java` — added `setUniform(String, int)` and `setUniform(String, boolean)` overloads.
+- Updated `ChunkMesher.java` — emits UV coordinates in tile units (`0→w`, `0→h`) and texture layer index per vertex. All six face passes use the correct layer selector per face direction. Base color changed from `block.color()` to white `(1,1,1)` — textures provide color, vertex color carries only brightness.
+- Updated `GameLoop.java` — wires `TextureManager` into init, render, and cleanup.
+
+### Decisions Made
+
+- `GL_TEXTURE_2D_ARRAY` over a traditional atlas. With an atlas, `GL_REPEAT` only wraps at the full texture boundary — tiling across greedy-merged quads requires UV sub-region math. With a texture array each tile occupies its own layer with full `[0,1]` UV space, so `GL_REPEAT` wraps correctly and merged quads tile for free.
+- UV coordinates in tile units rather than normalized. A greedy-merged `w×h` quad gets UVs `0→w` and `0→h`. `GL_REPEAT` handles the tiling — no `fract()` in the shader.
+- `GL_NEAREST` / `GL_NEAREST_MIPMAP_NEAREST` — preserves the pixelated voxel aesthetic at all distances, mipmaps prevent shimmer at distance.
+- `useTexture` bool uniform on the existing shader rather than a separate wireframe shader — keeps the renderer simple.
+- `Block.color()` is now dead code. Removed entirely.
+
+### Problems Encountered
+
+- OpenGL stores textures bottom-up. The grass side green strip was placed at `y < 3` (bottom of buffer = bottom of rendered face), which rendered it at the bottom instead of the top. Fixed by moving the condition to `y >= TILE_SIZE - 3`.
+- `ChunkMesher` was still passing `block.color()` as the base vertex color. The fragment shader multiplies texture sample by vertex color, so the green tint from `color()` was darkening and tinting the grass texture. Fixed by using white `(1,1,1)` as the base color in all face passes.
+
+### AI Assistance Notes
+
+- Claude wrote all new/updated files. Copilot (GPT 5.3 Codex) handled the mechanical ChunkMesher UV emission changes and GameLoop wiring.
+- The bottom-up texture flip was a known OpenGL convention that should have been accounted for upfront.
+- The `block.color()` tinting bug was caught from a screenshot after first run.
+
+### Lessons / Observations
+
+- The `GL_TEXTURE_2D_ARRAY` approach pays off immediately with greedy meshing — tiling just works without any extra math in either the mesher or the shader.
+- Procedurally generated placeholder textures are underrated for early development. No file management, always reproducible, trivial to swap for real art later.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

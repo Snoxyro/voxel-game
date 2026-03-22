@@ -89,7 +89,7 @@ public class ChunkMesher {
      * These faces show corner shadows at block junctions that look correct and natural.
      * ao=3 (fully open) → 1.0 brightness, ao=0 (fully occluded) → this value.
      */
-    private static final float AO_STRENGTH_SIDE = 0.60f;
+    private static final float AO_STRENGTH_SIDE = 0.30f;
 
     /**
      * AO darkening scale for TOP faces only.
@@ -100,13 +100,13 @@ public class ChunkMesher {
      * suppresses those stripes without affecting the good corner shadows on walls.
      * The directional side shading already provides the large-scale depth on walls.
      */
-    private static final float AO_STRENGTH_TOP = 0.75f;
+    private static final float AO_STRENGTH_TOP = 0.45f;
 
     /**
      * Floats per quad (6 vertices × 6 floats). Starting at 1024 quads × 36
      * floats = 36864 floats covers most cases without excessive initial allocation.
      */
-    private static final int INITIAL_CAPACITY = 36 * 1024;
+    private static final int INITIAL_CAPACITY = 54 * 1024;
 
     // -------------------------------------------------------------------------
     // AO offset tables — one entry per face direction.
@@ -279,11 +279,16 @@ public class ChunkMesher {
             }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 9) {
-                int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
-                float[] color = Block.values()[quads[qi+4] - 1].color();
-                buf = ensureCapacity(buf, size, 36);
+                int i = quads[qi], j = quads[qi+1];
+                int w = quads[qi+2];
+                int h = quads[qi+3];
+                Block blk = Block.values()[quads[qi+4] - 1];
+                // Textures provide color — vertex color carries only brightness (AO + directional shade).
+                float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
+                buf = ensureCapacity(buf, size, 54);
                 size = emitQuad(buf, size, color, SHADE_TOP, AO_STRENGTH_TOP,
                         quads[qi+5], quads[qi+6], quads[qi+7], quads[qi+8],
+                    w, h, blk.topTextureLayer(),
                         i,     y + 1, j,
                         i,     y + 1, j + h,
                         i + w, y + 1, j + h,
@@ -315,11 +320,16 @@ public class ChunkMesher {
             }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 9) {
-                int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
-                float[] color = Block.values()[quads[qi+4] - 1].color();
-                buf = ensureCapacity(buf, size, 36);
+                int i = quads[qi], j = quads[qi+1];
+                int w = quads[qi+2];
+                int h = quads[qi+3];
+                Block blk = Block.values()[quads[qi+4] - 1];
+                // Textures provide color — vertex color carries only brightness (AO + directional shade).
+                float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
+                buf = ensureCapacity(buf, size, 54);
                 size = emitQuad(buf, size, color, SHADE_BOTTOM, AO_STRENGTH_TOP,
                         quads[qi+5], quads[qi+6], quads[qi+7], quads[qi+8],
+                    w, h, blk.bottomTextureLayer(),
                         i,     y, j + h,
                         i,     y, j,
                         i + w, y, j,
@@ -352,11 +362,16 @@ public class ChunkMesher {
             }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 9) {
-                int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
-                float[] color = Block.values()[quads[qi+4] - 1].color();
-                buf = ensureCapacity(buf, size, 36);
+                int i = quads[qi], j = quads[qi+1];
+                int w = quads[qi+2];
+                int h = quads[qi+3];
+                Block blk = Block.values()[quads[qi+4] - 1];
+                // Textures provide color — vertex color carries only brightness (AO + directional shade).
+                float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
+                buf = ensureCapacity(buf, size, 54);
                 size = emitQuad(buf, size, color, SHADE_NORTH, AO_STRENGTH_SIDE,
                         quads[qi+5], quads[qi+6], quads[qi+7], quads[qi+8],
+                    w, h, blk.sideTextureLayer(),
                         i,     j,     z,
                         i,     j + h, z,
                         i + w, j + h, z,
@@ -389,11 +404,16 @@ public class ChunkMesher {
             }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 9) {
-                int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
-                float[] color = Block.values()[quads[qi+4] - 1].color();
-                buf = ensureCapacity(buf, size, 36);
+                int i = quads[qi], j = quads[qi+1];
+                int w = quads[qi+2];
+                int h = quads[qi+3];
+                Block blk = Block.values()[quads[qi+4] - 1];
+                // Textures provide color — vertex color carries only brightness (AO + directional shade).
+                float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
+                buf = ensureCapacity(buf, size, 54);
                 size = emitQuad(buf, size, color, SHADE_SOUTH, AO_STRENGTH_SIDE,
                         quads[qi+5], quads[qi+6], quads[qi+7], quads[qi+8],
+                    w, h, blk.sideTextureLayer(),
                         i + w, j,     z + 1,
                         i + w, j + h, z + 1,
                         i,     j + h, z + 1,
@@ -426,11 +446,16 @@ public class ChunkMesher {
             }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 9) {
-                int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
-                float[] color = Block.values()[quads[qi+4] - 1].color();
-                buf = ensureCapacity(buf, size, 36);
+                int i = quads[qi], j = quads[qi+1];
+                int w = quads[qi+2];
+                int h = quads[qi+3];
+                Block blk = Block.values()[quads[qi+4] - 1];
+                // Textures provide color — vertex color carries only brightness (AO + directional shade).
+                float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
+                buf = ensureCapacity(buf, size, 54);
                 size = emitQuad(buf, size, color, SHADE_EAST, AO_STRENGTH_SIDE,
                         quads[qi+5], quads[qi+6], quads[qi+7], quads[qi+8],
+                    w, h, blk.sideTextureLayer(),
                         x + 1, j,     i,
                         x + 1, j + h, i,
                         x + 1, j + h, i + w,
@@ -463,11 +488,16 @@ public class ChunkMesher {
             }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 9) {
-                int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
-                float[] color = Block.values()[quads[qi+4] - 1].color();
-                buf = ensureCapacity(buf, size, 36);
+                int i = quads[qi], j = quads[qi+1];
+                int w = quads[qi+2];
+                int h = quads[qi+3];
+                Block blk = Block.values()[quads[qi+4] - 1];
+                // Textures provide color — vertex color carries only brightness (AO + directional shade).
+                float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
+                buf = ensureCapacity(buf, size, 54);
                 size = emitQuad(buf, size, color, SHADE_WEST, AO_STRENGTH_SIDE,
                         quads[qi+5], quads[qi+6], quads[qi+7], quads[qi+8],
+                    w, h, blk.sideTextureLayer(),
                         x, j,     i + w,
                         x, j + h, i + w,
                         x, j + h, i,
@@ -678,6 +708,7 @@ public class ChunkMesher {
     private static int emitQuad(float[] buf, int size,
                                  float[] color, float directionalShade, float aoStrength,
                                  int ao0, int ao1, int ao2, int ao3,
+                                 float w, float h, int texLayer,
                                  float x0, float y0, float z0,
                                  float x1, float y1, float z1,
                                  float x2, float y2, float z2,
@@ -694,6 +725,10 @@ public class ChunkMesher {
         float r2 = color[0]*b2, g2 = color[1]*b2, bl2 = color[2]*b2;
         float r3 = color[0]*b3, g3 = color[1]*b3, bl3 = color[2]*b3;
 
+        float tl = texLayer;
+        // UV coordinates in tile units. v0=(0,0), v1=(0,h), v2=(w,h), v3=(w,0).
+        // GL_REPEAT handles tiling — no fract() needed.
+
         // Diagonal flip: when the bright diagonal runs v0→v2, flip the split so
         // both triangles share the gradient evenly instead of one getting all the
         // dark or all the bright interpolation.
@@ -707,22 +742,22 @@ public class ChunkMesher {
         if (ao0 + ao2 < ao1 + ao3) {
             // Flipped split — emit as [v1 v2 v3 v1 v3 v0] for Mesh.java compatibility.
             // Triangles: (v1,v2,v3) and (v1,v3,v0) ≡ (v0,v1,v3). Both CCW.
-            buf[size++]=x1; buf[size++]=y1; buf[size++]=z1; buf[size++]=r1; buf[size++]=g1; buf[size++]=bl1;
-            buf[size++]=x2; buf[size++]=y2; buf[size++]=z2; buf[size++]=r2; buf[size++]=g2; buf[size++]=bl2;
-            buf[size++]=x3; buf[size++]=y3; buf[size++]=z3; buf[size++]=r3; buf[size++]=g3; buf[size++]=bl3;
+            buf[size++]=x1; buf[size++]=y1; buf[size++]=z1; buf[size++]=r1; buf[size++]=g1; buf[size++]=bl1; buf[size++]=0f; buf[size++]=h;  buf[size++]=tl;
+            buf[size++]=x2; buf[size++]=y2; buf[size++]=z2; buf[size++]=r2; buf[size++]=g2; buf[size++]=bl2; buf[size++]=w;  buf[size++]=h;  buf[size++]=tl;
+            buf[size++]=x3; buf[size++]=y3; buf[size++]=z3; buf[size++]=r3; buf[size++]=g3; buf[size++]=bl3; buf[size++]=w;  buf[size++]=0f; buf[size++]=tl;
 
-            buf[size++]=x1; buf[size++]=y1; buf[size++]=z1; buf[size++]=r1; buf[size++]=g1; buf[size++]=bl1;
-            buf[size++]=x3; buf[size++]=y3; buf[size++]=z3; buf[size++]=r3; buf[size++]=g3; buf[size++]=bl3;
-            buf[size++]=x0; buf[size++]=y0; buf[size++]=z0; buf[size++]=r0; buf[size++]=g0; buf[size++]=bl0;
+            buf[size++]=x1; buf[size++]=y1; buf[size++]=z1; buf[size++]=r1; buf[size++]=g1; buf[size++]=bl1; buf[size++]=0f; buf[size++]=h;  buf[size++]=tl;
+            buf[size++]=x3; buf[size++]=y3; buf[size++]=z3; buf[size++]=r3; buf[size++]=g3; buf[size++]=bl3; buf[size++]=w;  buf[size++]=0f; buf[size++]=tl;
+            buf[size++]=x0; buf[size++]=y0; buf[size++]=z0; buf[size++]=r0; buf[size++]=g0; buf[size++]=bl0; buf[size++]=0f; buf[size++]=0f; buf[size++]=tl;
         } else {
             // Normal split — emit as [v0 v1 v2 v0 v2 v3]. Triangles: (v0,v1,v2) and (v0,v2,v3). Both CCW.
-            buf[size++]=x0; buf[size++]=y0; buf[size++]=z0; buf[size++]=r0; buf[size++]=g0; buf[size++]=bl0;
-            buf[size++]=x1; buf[size++]=y1; buf[size++]=z1; buf[size++]=r1; buf[size++]=g1; buf[size++]=bl1;
-            buf[size++]=x2; buf[size++]=y2; buf[size++]=z2; buf[size++]=r2; buf[size++]=g2; buf[size++]=bl2;
+            buf[size++]=x0; buf[size++]=y0; buf[size++]=z0; buf[size++]=r0; buf[size++]=g0; buf[size++]=bl0; buf[size++]=0f; buf[size++]=0f; buf[size++]=tl;
+            buf[size++]=x1; buf[size++]=y1; buf[size++]=z1; buf[size++]=r1; buf[size++]=g1; buf[size++]=bl1; buf[size++]=0f; buf[size++]=h;  buf[size++]=tl;
+            buf[size++]=x2; buf[size++]=y2; buf[size++]=z2; buf[size++]=r2; buf[size++]=g2; buf[size++]=bl2; buf[size++]=w;  buf[size++]=h;  buf[size++]=tl;
 
-            buf[size++]=x0; buf[size++]=y0; buf[size++]=z0; buf[size++]=r0; buf[size++]=g0; buf[size++]=bl0;
-            buf[size++]=x2; buf[size++]=y2; buf[size++]=z2; buf[size++]=r2; buf[size++]=g2; buf[size++]=bl2;
-            buf[size++]=x3; buf[size++]=y3; buf[size++]=z3; buf[size++]=r3; buf[size++]=g3; buf[size++]=bl3;
+            buf[size++]=x0; buf[size++]=y0; buf[size++]=z0; buf[size++]=r0; buf[size++]=g0; buf[size++]=bl0; buf[size++]=0f; buf[size++]=0f; buf[size++]=tl;
+            buf[size++]=x2; buf[size++]=y2; buf[size++]=z2; buf[size++]=r2; buf[size++]=g2; buf[size++]=bl2; buf[size++]=w;  buf[size++]=h;  buf[size++]=tl;
+            buf[size++]=x3; buf[size++]=y3; buf[size++]=z3; buf[size++]=r3; buf[size++]=g3; buf[size++]=bl3; buf[size++]=w;  buf[size++]=0f; buf[size++]=tl;
         }
 
         return size;

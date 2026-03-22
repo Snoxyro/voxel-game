@@ -110,6 +110,27 @@ public class ShaderProgram {
     }
 
     /**
+     * Sets an integer uniform (also used for sampler uniforms and booleans).
+     * The program must be bound before calling this.
+     */
+    public void setUniform(String name, int value) {
+        int location = GL20.glGetUniformLocation(programId, name);
+        if (location == -1) {
+            System.err.println("Warning: uniform '" + name + "' not found in shader program.");
+            return;
+        }
+        GL20.glUniform1i(location, value);
+    }
+
+    /**
+     * Sets a boolean uniform. Booleans are set as integers (1=true, 0=false) in GLSL.
+     * The program must be bound before calling this.
+     */
+    public void setUniform(String name, boolean value) {
+        setUniform(name, value ? 1 : 0);
+    }
+
+    /**
      * Binds this shader program — all subsequent draw calls will use it.
      */
     public void bind() {

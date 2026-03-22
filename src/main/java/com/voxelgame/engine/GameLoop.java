@@ -43,6 +43,7 @@ public class GameLoop {
     private Camera                 camera;
     private InputHandler           inputHandler;
     private ShaderProgram          shaderProgram;
+    private TextureManager         textureManager;
     private World                  world;
     private Player                 player;
     private BlockHighlightRenderer blockHighlight;
@@ -116,6 +117,12 @@ public class GameLoop {
         player = new Player(SPAWN_X, SPAWN_Y, SPAWN_Z);
 
         shaderProgram  = new ShaderProgram("/shaders/default.vert", "/shaders/default.frag");
+        textureManager = new TextureManager();
+        textureManager.init();
+        // Tell the shader which texture unit the array is bound to (unit 0, always).
+        shaderProgram.bind();
+        shaderProgram.setUniform("texArray", 0);
+        shaderProgram.unbind();
         blockHighlight = new BlockHighlightRenderer();
         hudRenderer    = new HudRenderer();
 
@@ -312,7 +319,10 @@ public class GameLoop {
         shaderProgram.bind();
         shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
         shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
+        textureManager.bind();
+        shaderProgram.setUniform("useTexture", true);
         lastRenderStats = world.render(shaderProgram, camera.getProjectionMatrix(), camera.getViewMatrix());
+        shaderProgram.setUniform("useTexture", false);
 
         if (lastRaycast.hit()) {
             blockHighlight.render(shaderProgram,
@@ -329,6 +339,7 @@ public class GameLoop {
     private void cleanup() {
         hudRenderer.cleanup();
         blockHighlight.cleanup();
+        textureManager.cleanup();
         world.cleanup();
         shaderProgram.cleanup();
         window.cleanup();
