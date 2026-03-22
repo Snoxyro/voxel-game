@@ -24,7 +24,7 @@ public class GameLoop {
      */
     private static final float DELTA_TIME        = 1.0f / TARGET_UPS;
 
-    private static final float FREECAM_SPEED     = 0.50f;
+    private static final float FREECAM_SPEED     = 1.50f;
     private static final float MOUSE_SENSITIVITY = 0.1f;
 
     /** Maximum block interaction range in blocks. */
@@ -183,7 +183,13 @@ public class GameLoop {
      */
     private void update() {
         // Stream chunks around the viewer — works in both physics and freecam mode
-        world.update(camera.getPosition().x, camera.getPosition().y, camera.getPosition().z);
+        float yawRad1   = (float) Math.toRadians(camera.getYaw());
+        float pitchRad1 = (float) Math.toRadians(camera.getPitch());
+        float lookX    = (float) (Math.cos(yawRad1) * Math.cos(pitchRad1));
+        float lookY    = (float)  Math.sin(pitchRad1);
+        float lookZ    = (float) (Math.sin(yawRad1) * Math.cos(pitchRad1));
+        world.update(camera.getPosition().x, camera.getPosition().y, camera.getPosition().z,
+                    lookX, lookY, lookZ);
 
         inputHandler.update();
 

@@ -54,7 +54,7 @@ public class World {
      * Maximum neighbor remesh results applied per frame.
      * Separate from the new-chunk cap so remeshes don't starve new chunk uploads.
      */
-    private static final int MAX_REMESHES_PER_FRAME = 8;
+    private static final int MAX_REMESHES_PER_FRAME = 64;
 
     /** Maps chunk grid positions to their block data. */
     private final Map<ChunkPos, Chunk> chunks = new HashMap<>();
@@ -94,6 +94,21 @@ public class World {
     private int lastScheduledCX = Integer.MIN_VALUE;
     private int lastScheduledCY = Integer.MIN_VALUE;
     private int lastScheduledCZ = Integer.MIN_VALUE;
+
+    /**
+     * Pending generation tasks sorted by priority. Maintained on the main thread
+     * so priority can be re-evaluated every tick based on current look direction.
+     * Workers only receive tasks pulled from the front of this list — the executor
+     * queue stays shallow so priority changes take effect within one tick.
+     */
+    private final List<ChunkPos> generationQueue = new ArrayList<>();
+
+    /**
+     * Maximum chunk generation tasks submitted to the executor per tick.
+     * Keeps the executor queue shallow — workers finish quickly and the next
+     * tick's re-sort immediately reflects the current look direction.
+     */
+    private static final int MAX_CHUNKS_PER_TICK = 16;
 
     /**
      * Single background thread for all meshing work.
@@ -137,7 +152,7 @@ public class World {
      * @param py viewer Y in world space
      * @param pz viewer Z in world space
      */
-    public void update(float px, float py, float pz) {
+    public void update(float px, float py, float pz, float dirX, float dirY, float dirZ) {
         int centerCX = Math.floorDiv((int) px, Chunk.SIZE);
         int centerCY = Math.floorDiv((int) py, Chunk.SIZE);
         int centerCZ = Math.floorDiv((int) pz, Chunk.SIZE);
@@ -145,9 +160,7 @@ public class World {
         drainPendingChunks(centerCX, centerCY, centerCZ);
         drainPendingRemeshes();
         processDirtyMeshes();
-        // Only re-scan the load area when the viewer has crossed into a new chunk.
-        // When standing still, all needed chunks are already in inProgress from the
-        // previous schedule call — rescanning 14 000 positions produces nothing new.
+
         if (centerCX != lastScheduledCX
                 || centerCY != lastScheduledCY
                 || centerCZ != lastScheduledCZ) {
@@ -156,6 +169,10 @@ public class World {
             lastScheduledCY = centerCY;
             lastScheduledCZ = centerCZ;
         }
+
+        // Re-sort and submit every tick — direction changes take effect immediately
+        tickGenerationQueue(centerCX, centerCY, centerCZ, dirX, dirY, dirZ);
+
         unloadDistantChunks(centerCX, centerCY, centerCZ);
     }
 
@@ -356,12 +373,11 @@ public class World {
     }
 
     /**
-     * Queues generation + meshing for every in-range chunk that isn't loaded
-     * or already in progress. Sorts by distance — closest chunks first.
+     * Adds all needed in-range chunks to {@link #generationQueue}.
+     * Does not submit to the executor — submission happens in
+     * {@link #tickGenerationQueue} every tick so priority stays current.
      */
     private void scheduleNeededChunks(int centerCX, int centerCY, int centerCZ) {
-        List<ChunkPos> needed = new ArrayList<>();
-
         for (int cx = centerCX - RENDER_DISTANCE_H; cx <= centerCX + RENDER_DISTANCE_H; cx++) {
             for (int cz = centerCZ - RENDER_DISTANCE_H; cz <= centerCZ + RENDER_DISTANCE_H; cz++) {
                 int dx = cx - centerCX;
@@ -371,28 +387,13 @@ public class World {
                 for (int cy = centerCY - RENDER_DISTANCE_V; cy <= centerCY + RENDER_DISTANCE_V; cy++) {
                     if (cy < 0) continue;
                     ChunkPos pos = new ChunkPos(cx, cy, cz);
-                    if (!chunks.containsKey(pos) && !inProgress.contains(pos)) {
-                        needed.add(pos);
+                    if (!chunks.containsKey(pos)
+                            && !inProgress.contains(pos)
+                            && !generationQueue.contains(pos)) {
+                        generationQueue.add(pos);
                     }
                 }
             }
-        }
-
-        needed.sort(Comparator.comparingInt(p -> {
-            int dx = p.x() - centerCX;
-            int dy = p.y() - centerCY;
-            int dz = p.z() - centerCZ;
-            return dx * dx + dy * dy + dz * dz;
-        }));
-
-        for (ChunkPos pos : needed) {
-            Map<ChunkPos, Chunk> neighborSnapshot = captureNeighbors(pos);
-            inProgress.add(pos);
-            generationExecutor.submit(() -> {
-                Chunk chunk = terrainGenerator.generateChunk(pos);
-                float[] vertices = ChunkMesher.mesh(chunk, pos, neighborSnapshot);
-                pendingChunks.offer(new PendingChunk(pos, chunk, vertices));
-            });
         }
     }
 
@@ -435,6 +436,99 @@ public class World {
         if (!columnStillLoaded) {
             terrainGenerator.evictColumn(pos.x(), pos.z());
         }
+    }
+
+    /**
+     * Re-sorts the generation queue by direction-biased distance and submits
+     * tasks to the executor each tick. Budget is split: 75% goes to the
+     * highest-priority direction-biased chunks, 25% goes to the closest
+     * unloaded chunks regardless of look direction. This guarantees all
+     * chunks eventually load even if the player never looks at them.
+     *
+     * @param centerCX viewer center chunk X
+     * @param centerCY viewer center chunk Y
+     * @param centerCZ viewer center chunk Z
+     * @param dirX     normalised look direction X
+     * @param dirY     normalised look direction Y
+     * @param dirZ     normalised look direction Z
+     */
+    private void tickGenerationQueue(int centerCX, int centerCY, int centerCZ,
+                                    float dirX, float dirY, float dirZ) {
+        if (generationQueue.isEmpty()) return;
+
+        // Remove entries that were loaded or submitted since they were queued
+        generationQueue.removeIf(pos ->
+            chunks.containsKey(pos) || inProgress.contains(pos));
+
+        if (generationQueue.isEmpty()) return;
+
+        int biasedCount   = (int) (MAX_CHUNKS_PER_TICK * 0.75);
+        int distanceCount = MAX_CHUNKS_PER_TICK - biasedCount;
+
+        // --- Biased pass: sort by direction-weighted distance ---
+        generationQueue.sort(Comparator.comparingDouble(p -> {
+            float dx = p.x() - centerCX;
+            float dy = p.y() - centerCY;
+            float dz = p.z() - centerCZ;
+            float squaredDist = dx * dx + dy * dy + dz * dz;
+
+            float dot = 0f;
+            float chunkLen = (float) Math.sqrt(squaredDist);
+            if (chunkLen > 0.001f && (dirX != 0 || dirY != 0 || dirZ != 0)) {
+                dot = (dx / chunkLen) * dirX
+                    + (dy / chunkLen) * dirY
+                    + (dz / chunkLen) * dirZ;
+            }
+            return squaredDist * (1.0 - dot * 0.5);
+        }));
+
+        Set<ChunkPos> submittedThisTick = new HashSet<>();
+
+        Iterator<ChunkPos> it = generationQueue.iterator();
+        int submitted = 0;
+        while (it.hasNext() && submitted < biasedCount) {
+            ChunkPos pos = it.next();
+            it.remove();
+            submitToExecutor(pos);
+            submittedThisTick.add(pos);
+            submitted++;
+        }
+
+        // --- Distance pass: sort remaining by pure distance ---
+        // Guarantees background progress regardless of look direction.
+        generationQueue.sort(Comparator.comparingInt(p -> {
+            int dx = p.x() - centerCX;
+            int dy = p.y() - centerCY;
+            int dz = p.z() - centerCZ;
+            return dx * dx + dy * dy + dz * dz;
+        }));
+
+        it = generationQueue.iterator();
+        submitted = 0;
+        while (it.hasNext() && submitted < distanceCount) {
+            ChunkPos pos = it.next();
+            if (submittedThisTick.contains(pos)) continue;
+            it.remove();
+            submitToExecutor(pos);
+            submitted++;
+        }
+    }
+
+    /**
+     * Captures a neighbor snapshot and submits one chunk generation task
+     * to the executor. Extracted to avoid duplicating this logic between
+     * the biased and distance passes in {@link #tickGenerationQueue}.
+     *
+     * @param pos the chunk position to generate
+     */
+    private void submitToExecutor(ChunkPos pos) {
+        Map<ChunkPos, Chunk> neighborSnapshot = captureNeighbors(pos);
+        inProgress.add(pos);
+        generationExecutor.submit(() -> {
+            Chunk chunk = terrainGenerator.generateChunk(pos);
+            float[] vertices = ChunkMesher.mesh(chunk, pos, neighborSnapshot);
+            pendingChunks.offer(new PendingChunk(pos, chunk, vertices));
+        });
     }
 
     // -------------------------------------------------------------------------

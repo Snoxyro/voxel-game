@@ -1248,6 +1248,134 @@ Greedy meshing needs revisiting for tiled UVs across merged quads.
 
 ---
 
+## Entry 027 — Direction-Biased Generation Queue
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Replaced direct executor submission in `scheduleNeededChunks` with a main-thread
+  `generationQueue` list. Tasks are no longer submitted directly — they sit in this
+  list and are drip-fed to the executor each tick via a new `tickGenerationQueue()`.
+- `tickGenerationQueue()` re-sorts and submits every tick, so a camera turn takes
+  effect within one tick rather than waiting for a backlogged executor queue to drain.
+- Added look direction as input to `World.update()` — camera yaw/pitch direction
+  computed in `GameLoop` and passed in each tick. More reliable than deriving
+  direction from position delta (which dies when standing still).
+- Submission budget split 75/25 per tick: 75% goes to direction-biased chunks
+  (forward chunks prioritized), 25% goes to closest chunks by pure distance
+  regardless of look direction. Guarantees all chunks eventually load even if the
+  player never looks at them — prevents far chunks from starving indefinitely.
+- Extracted `submitToExecutor(pos)` helper to avoid duplicating snapshot+submit
+  logic between the two passes.
+- `MAX_CHUNKS_PER_TICK = 16` — tunable constant, higher values load faster at
+  the cost of occasional frame budget pressure during fast movement.
+- Raised `MAX_UPLOADS_PER_FRAME` from 4 to 16 — uploads are cheap now that
+  vertices are pre-built on the worker thread.
+
+### Decisions Made
+- Main-thread priority queue is the correct architecture for any system where
+  priority changes faster than tasks complete. Sorting a list each tick is cheap;
+  draining a backlogged executor queue is not.
+- Look direction preferred over velocity direction — always available, directly
+  represents player intent, works when standing still.
+- 75/25 split is a tunable policy decision. 100% biased starves background chunks.
+  100% distance loses all directional benefit. 75/25 balances both well in practice.
+
+### Problems Encountered
+- Initial implementation submitted all tasks directly to the executor on schedule.
+  Camera turns had no effect on already-queued tasks — executor queue locked in the
+  old priority order. Fixed by the main-thread queue approach.
+- Bias factor of 0.5 was too aggressive — chunks directly behind the player were
+  penalized enough to never load until the player turned. Fixed by the 25% distance
+  pass which guarantees background progress.
+
+### AI Assistance Notes
+- Claude wrote all changes. First implementation had the executor queue problem
+  above — required a second pass to redesign around the main-thread queue.
+
+### Lessons / Observations
+- Sorting before submitting only helps if the executor queue is shallow. A deep
+  executor queue locks in old priorities. The fix is to keep the queue shallow by
+  controlling submission rate from the main thread.
+- Manual behaviour descriptions are far more reliable than screenshots for diagnosing
+  ordering and priority bugs in async systems.
+
+---
+
+## Entry 028 — TerrainGenerator Seed Field Cleanup
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Removed unused `private final long seed` field from `TerrainGenerator`.
+  The seed value is fully consumed during constructor execution to populate
+  `octaveSeeds[]` — storing it as a field served no purpose after that.
+- Constructor parameter `seed` retained — still needed to compute per-octave seeds.
+
+### Lessons / Observations
+- Pre-computing into arrays at construction time eliminates the need to retain
+  input parameters as fields. Fields that exist only to silence a compiler warning
+  are a code smell worth removing immediately.
+
+---
+
+## Phase 4 Roadmap — Remaining Work
+
+### Completed
+- Neighbor-aware chunk meshing (correctness fix)
+- Window drag freeze fix
+- Neighbor rebuild sequencing fix
+- Frustum culling with chunk counter
+- Indexed rendering (EBO)
+- Greedy meshing
+- Chunk streaming with background generation
+- Meshing moved to worker thread (neighbor snapshot)
+- Async neighbor remesh path
+- Thread pool (availableProcessors - 1 workers)
+- Terrain early exits for air/stone chunks
+- float[] buffer in ChunkMesher (no boxing)
+- Flat byte[] block storage in Chunk (~700MB RAM reduction)
+- Heightmap column cache (up to 12× noise reduction per column)
+- isAllAir() fast-path + Y occupancy range clamping in mesher
+- Mask contamination fix (phantom faces from Y clamping)
+- Pre-computed fBm octave arrays
+- Schedule guard (skip 14k position scan when center chunk unchanged)
+- Async remesh pipeline fix (self-remesh + dirty mark loss)
+- Direction-biased generation queue with 75/25 split budget
+- MAX_UPLOADS_PER_FRAME raised to 16
+
+### Remaining (in priority order)
+
+**1. Ambient occlusion** *(next up — continue in new session)*
+Bake per-vertex corner darkening into vertex colors at mesh-build time. Large visual
+impact, zero runtime cost, no separate light system. Integrates into ChunkMesher,
+runs on worker thread naturally.
+IMPORTANT: AO values must be included in the greedy merge condition —
+two faces can only merge if block type AND all four vertex AO values match.
+Otherwise darkening interpolates incorrectly across merged quads.
+Research confirmed two additional details worth implementing:
+- The standard 3-sample AO formula uses side1, side2, and corner to compute
+  each vertex value. When side1 AND side2 are both solid, corner is irrelevant
+  (the vertex is fully occluded regardless).
+- Quads where opposite corners have unequal AO sums should flip their diagonal
+  split to avoid a visible anisotropy artifact on flat surfaces. This is the
+  single most important quality detail in voxel AO.
+
+**2. Textures**
+UV attribute, texture atlas via STB, sampler2D uniform, per-block UV lookup in
+mesher. Greedy meshing needs revisiting for tiled UVs across merged quads.
+IMPORTANT: partial block types (stairs, slabs) will break greedy merging and
+face occlusion culling when introduced. Block needs an occludesFace() method
+and the mesher needs a fallback per-block path for non-full blocks.
+
+### Deferred to Phase 5+
+- Full light propagation (block lights + skylight + dynamic updates)
+- LOD / distant rendering
+- Caves (3D noise density functions)
+- Multiplayer: `World.update()` → `update(Collection<Vector3f>)`
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

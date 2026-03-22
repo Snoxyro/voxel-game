@@ -76,8 +76,6 @@ public class TerrainGenerator {
     /** Maximum possible surface Y — chunks above this are guaranteed all-air. */
     private static final int MAX_SURFACE_Y = BASE_HEIGHT + HEIGHT_VARIATION;
 
-    private final long seed; //unused for now, subject for removal
-
     /**
      * Heightmap cache — maps packed column key → int[SIZE*SIZE] of surface heights.
      * One entry per (cx, cz) column. Shared across all worker threads; access is
@@ -106,8 +104,6 @@ public class TerrainGenerator {
      * @param seed the world seed — same seed always produces identical terrain
      */
     public TerrainGenerator(long seed) {
-        this.seed = seed;
-
         octaveSeeds       = new long[OCTAVES];
         octaveAmplitudes  = new double[OCTAVES];
         octaveFrequencies = new double[OCTAVES];
