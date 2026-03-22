@@ -14,30 +14,47 @@ import java.util.concurrent.*;
  * chunks that have moved out of range.
  *
  * <h3>Threading model</h3>
- * Terrain generation is CPU-heavy and runs on a dedicated background thread.
- * Everything that touches OpenGL (mesh build, GPU upload, neighbor rebuilds)
- * runs on the main thread. The handoff point is {@link #pendingChunks} — a
- * lock-free queue that the worker writes to and the main thread drains each tick.
+ * All calls to {@link ChunkMesher#mesh} run on the worker thread — never the
+ * main thread. The main thread only performs GPU uploads ({@code new Mesh()})
+ * and map bookkeeping.
+ *
+ * <p>Two async paths exist:
+ * <ul>
+ *   <li><b>New chunk path:</b> worker generates terrain + meshes → puts result
+ *       in {@link #pendingChunks}. Main thread drains, stores block data,
+ *       uploads mesh, and marks the six neighbors dirty.</li>
+ *   <li><b>Remesh path:</b> positions in {@link #dirtyMeshes} are submitted to
+ *       the worker for re-meshing → results land in {@link #pendingRemeshes}.
+ *       Main thread drains and swaps the GPU mesh. Used for neighbor boundary
+ *       corrections and chunk unload recovery.</li>
+ * </ul>
+ *
+ * <p>{@code setBlock} is the only place that still calls {@link ChunkMesher#mesh}
+ * synchronously — it is player-triggered, infrequent, and affects at most 7 chunks.
  *
  * <h3>Multiplayer note</h3>
- * This class is server-side logic. When multiplayer is added, it will move into
- * a Server class and {@link #update} will accept a collection of viewer positions
- * (one per connected player) rather than a single position. {@code GameLoop} will
- * become the client-side rendering loop. The seam is here.
+ * This class is server-side logic. {@link #update} will become
+ * {@code update(Collection<Vector3f>)} when multiplayer is added. The seam is here.
  */
 public class World {
 
-    /**
-     * Horizontal chunk load radius around the viewer in chunk units.
-     * Chunks within this circular radius on the XZ plane are loaded.
-     */
+    /** Horizontal circular chunk load radius in chunk units. */
     private static final int RENDER_DISTANCE_H = 16;
 
+    /** Vertical chunk load radius in chunk units (above and below viewer). */
+    private static final int RENDER_DISTANCE_V = 6;
+
     /**
-     * Vertical chunk load radius around the viewer in chunk units.
-     * Chunks within this many chunk-heights above or below the viewer are loaded.
+     * Maximum new-chunk GPU uploads per frame.
+     * Each upload also marks up to 6 neighbors dirty for async remeshing.
      */
-    private static final int RENDER_DISTANCE_V = 8;
+    private static final int MAX_UPLOADS_PER_FRAME = 4;
+
+    /**
+     * Maximum neighbor remesh results applied per frame.
+     * Separate from the new-chunk cap so remeshes don't starve new chunk uploads.
+     */
+    private static final int MAX_REMESHES_PER_FRAME = 8;
 
     /** Maps chunk grid positions to their block data. */
     private final Map<ChunkPos, Chunk> chunks = new HashMap<>();
@@ -45,49 +62,55 @@ public class World {
     /** Maps chunk grid positions to their GPU meshes. */
     private final Map<ChunkPos, Mesh> meshes = new HashMap<>();
 
-    /**
-     * Positions currently being generated on the worker thread.
-     * Synchronized set — written from both the main thread (on schedule) and
-     * read from the main thread (on drain), but also checked before scheduling.
-     * Using a synchronized set is sufficient since all reads and writes happen
-     * on the main thread except the offer() in the worker lambda, which only
-     * writes to pendingChunks, not inProgress directly.
-     */
+    /** Positions currently being generated or meshed on the worker thread. */
     private final Set<ChunkPos> inProgress = new HashSet<>();
 
     /**
-     * Completed (chunk data, position) pairs waiting to be uploaded to the GPU.
-     * Written by the worker thread, drained by the main thread each tick.
-     * ConcurrentLinkedQueue is lock-free and safe for this single-producer,
-     * single-consumer pattern.
+     * Positions that need their GPU mesh rebuilt due to a neighbor change.
+     * Processed asynchronously — positions are submitted to the worker and
+     * results land in {@link #pendingRemeshes}.
+     * Using LinkedHashSet preserves insertion order (FIFO-ish) for consistent behavior.
      */
-    private final ConcurrentLinkedQueue<PendingChunk> pendingChunks = new ConcurrentLinkedQueue<>();
+    private final Set<ChunkPos> dirtyMeshes = new LinkedHashSet<>();
 
     /**
-     * Single background thread for terrain generation.
-     * Marked daemon so it doesn't prevent JVM shutdown if cleanup() isn't called.
-     * Will become a thread pool when parallel generation is needed.
+     * Positions currently submitted for async remeshing.
+     * Prevents the same position being submitted multiple times while in-flight.
      */
-    private final ExecutorService generationExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "chunk-generator");
-        t.setDaemon(true);
-        return t;
-    });
+    private final Set<ChunkPos> remeshInProgress = new HashSet<>();
+
+    /** New chunks (block data + pre-built vertices) waiting for GPU upload. */
+    private final ConcurrentLinkedQueue<PendingChunk> pendingChunks = new ConcurrentLinkedQueue<>();
+
+    /** Completed remesh jobs (vertices only) waiting for GPU swap. */
+    private final ConcurrentLinkedQueue<PendingRemesh> pendingRemeshes = new ConcurrentLinkedQueue<>();
+
+    /**
+     * Single background thread for all meshing work.
+     * Upgrade to newFixedThreadPool(N) when parallel generation is needed —
+     * each task is self-contained (no shared mutable state), so no other
+     * changes are required.
+     */
+    private final ExecutorService generationExecutor = Executors.newFixedThreadPool(
+        Math.max(1, Runtime.getRuntime().availableProcessors() - 1), r -> {
+            Thread t = new Thread(r, "chunk-generator");
+            t.setDaemon(true);
+            return t;
+        }
+    );
 
     private final TerrainGenerator terrainGenerator;
 
-    /**
-     * Carrier for a chunk that finished generating on the worker thread.
-     * Held in pendingChunks until the main thread uploads it.
-     */
-    private record PendingChunk(ChunkPos pos, Chunk chunk) {}
+    /** Carrier for a newly generated chunk — block data + pre-built vertex array. */
+    private record PendingChunk(ChunkPos pos, Chunk chunk, float[] vertices) {}
+
+    /** Carrier for a completed neighbor remesh — vertex array only, no new chunk data. */
+    private record PendingRemesh(ChunkPos pos, float[] vertices) {}
 
     /**
      * Creates a World with the given world seed.
-     * The seed is passed to the terrain generator — same seed always produces
-     * identical terrain.
      *
-     * @param seed world seed
+     * @param seed world seed — same seed always produces identical terrain
      */
     public World(long seed) {
         this.terrainGenerator = new TerrainGenerator(seed);
@@ -97,15 +120,8 @@ public class World {
      * Drives chunk streaming for a single viewer position. Call once per tick
      * on the main thread.
      *
-     * <p>Order of operations each tick:
-     * <ol>
-     *   <li>Drain the pending queue — upload any chunks the worker finished.</li>
-     *   <li>Schedule generation for chunks in range that aren't loaded or queued.</li>
-     *   <li>Unload chunks that have moved out of range.</li>
-     * </ol>
-     *
-     * <p>In multiplayer this will accept a {@code Collection<Vector3f>} of viewer
-     * positions (one per connected player) and compute the union of their load areas.
+     * <p>In multiplayer: replace with {@code update(Collection<Vector3f>)} and
+     * compute the union of all viewer load areas.
      *
      * @param px viewer X in world space
      * @param py viewer Y in world space
@@ -117,21 +133,20 @@ public class World {
         int centerCZ = Math.floorDiv((int) pz, Chunk.SIZE);
 
         drainPendingChunks(centerCX, centerCY, centerCZ);
+        drainPendingRemeshes();
+        processDirtyMeshes();
         scheduleNeededChunks(centerCX, centerCY, centerCZ);
         unloadDistantChunks(centerCX, centerCY, centerCZ);
     }
 
     /**
      * Returns the block at the given world-space coordinates.
-     * Returns {@link Block#AIR} if the coordinates fall outside any loaded chunk.
-     *
-     * <p>Uses {@code Math.floorDiv} / {@code Math.floorMod} so negative coordinates
-     * resolve correctly — world X=-1 belongs to chunk X=-1 (local X=15), not chunk 0.
+     * Returns {@link Block#AIR} for unloaded chunks.
      *
      * @param worldX world-space X
      * @param worldY world-space Y
      * @param worldZ world-space Z
-     * @return the block at that position, or {@link Block#AIR} if unloaded
+     * @return block at that position, or {@link Block#AIR} if unloaded
      */
     public Block getBlock(int worldX, int worldY, int worldZ) {
         int cx = Math.floorDiv(worldX, Chunk.SIZE);
@@ -147,9 +162,9 @@ public class World {
     }
 
     /**
-     * Sets the block at the given world-space coordinates. Rebuilds the mesh for
-     * the affected chunk and any face-adjacent neighbors whose boundary faces are
-     * now stale. Does nothing if the coordinates fall outside any loaded chunk.
+     * Sets the block at the given world-space coordinates and synchronously
+     * rebuilds affected meshes. Synchronous here is acceptable — this is
+     * player-triggered, affects at most 7 chunks, and happens infrequently.
      *
      * @param worldX world-space X
      * @param worldY world-space Y
@@ -169,14 +184,14 @@ public class World {
         int lz = Math.floorMod(worldZ, Chunk.SIZE);
 
         chunk.setBlock(lx, ly, lz, block);
-        rebuildMesh(pos);
+        rebuildMeshSync(pos);
 
-        if (lx == 0)              rebuildMesh(new ChunkPos(cx - 1, cy, cz));
-        if (lx == Chunk.SIZE - 1) rebuildMesh(new ChunkPos(cx + 1, cy, cz));
-        if (ly == 0)              rebuildMesh(new ChunkPos(cx, cy - 1, cz));
-        if (ly == Chunk.SIZE - 1) rebuildMesh(new ChunkPos(cx, cy + 1, cz));
-        if (lz == 0)              rebuildMesh(new ChunkPos(cx, cy, cz - 1));
-        if (lz == Chunk.SIZE - 1) rebuildMesh(new ChunkPos(cx, cy, cz + 1));
+        if (lx == 0)              rebuildMeshSync(new ChunkPos(cx - 1, cy, cz));
+        if (lx == Chunk.SIZE - 1) rebuildMeshSync(new ChunkPos(cx + 1, cy, cz));
+        if (ly == 0)              rebuildMeshSync(new ChunkPos(cx, cy - 1, cz));
+        if (ly == Chunk.SIZE - 1) rebuildMeshSync(new ChunkPos(cx, cy + 1, cz));
+        if (lz == 0)              rebuildMeshSync(new ChunkPos(cx, cy, cz - 1));
+        if (lz == Chunk.SIZE - 1) rebuildMeshSync(new ChunkPos(cx, cy, cz + 1));
     }
 
     /**
@@ -230,23 +245,82 @@ public class World {
     // -------------------------------------------------------------------------
 
     /**
-     * Uploads any chunks the worker thread finished generating.
-     * Discards chunks that moved out of range while being generated.
+     * Uploads completed new chunks to the GPU (up to MAX_UPLOADS_PER_FRAME).
+     * Stores block data, uploads the pre-built vertex array, then marks the
+     * six neighbors dirty for async boundary correction.
      */
     private void drainPendingChunks(int centerCX, int centerCY, int centerCZ) {
         PendingChunk pending;
-        while ((pending = pendingChunks.poll()) != null) {
+        int uploaded = 0;
+        while (uploaded < MAX_UPLOADS_PER_FRAME && (pending = pendingChunks.poll()) != null) {
             inProgress.remove(pending.pos());
-            if (isInRange(pending.pos(), centerCX, centerCY, centerCZ)) {
-                addChunk(pending.pos(), pending.chunk());
+            if (!isInRange(pending.pos(), centerCX, centerCY, centerCZ)) continue;
+
+            chunks.put(pending.pos(), pending.chunk());
+
+            if (pending.vertices().length > 0) {
+                meshes.put(pending.pos(), new Mesh(pending.vertices()));
             }
+
+            // Mark neighbors dirty for async remeshing — they may have emitted
+            // boundary faces toward this position when it was absent.
+            // This replaces the old synchronous rebuildNeighbors() call.
+            markNeighborsDirty(pending.pos());
+            uploaded++;
         }
     }
 
     /**
-     * Queues generation for every chunk in range that isn't loaded or already
-     * being generated. Sorts candidates by distance so the closest chunks
-     * are generated first — gives a better visual pop-in experience.
+     * Applies completed neighbor remesh results to the GPU (up to MAX_REMESHES_PER_FRAME).
+     * Skips results for chunks that were unloaded while the remesh was in flight.
+     */
+    private void drainPendingRemeshes() {
+        PendingRemesh pending;
+        int applied = 0;
+        while (applied < MAX_REMESHES_PER_FRAME && (pending = pendingRemeshes.poll()) != null) {
+            remeshInProgress.remove(pending.pos());
+
+            // Chunk may have been unloaded while remesh was in flight — discard
+            if (!chunks.containsKey(pending.pos())) continue;
+
+            Mesh old = meshes.remove(pending.pos());
+            if (old != null) old.cleanup();
+
+            if (pending.vertices().length > 0) {
+                meshes.put(pending.pos(), new Mesh(pending.vertices()));
+            }
+            applied++;
+        }
+    }
+
+    /**
+     * Submits dirty mesh positions to the worker thread for remeshing.
+     * Captures a neighbor snapshot on the main thread before submission.
+     * Skips positions already in-flight to avoid redundant work.
+     */
+    private void processDirtyMeshes() {
+        Iterator<ChunkPos> it = dirtyMeshes.iterator();
+        while (it.hasNext()) {
+            ChunkPos pos = it.next();
+            it.remove();
+
+            // Only remesh if chunk data still exists and isn't already being remeshed
+            if (!chunks.containsKey(pos) || remeshInProgress.contains(pos)) continue;
+
+            Chunk chunk = chunks.get(pos);
+            Map<ChunkPos, Chunk> snapshot = captureNeighbors(pos);
+
+            remeshInProgress.add(pos);
+            generationExecutor.submit(() -> {
+                float[] vertices = ChunkMesher.mesh(chunk, pos, snapshot);
+                pendingRemeshes.offer(new PendingRemesh(pos, vertices));
+            });
+        }
+    }
+
+    /**
+     * Queues generation + meshing for every in-range chunk that isn't loaded
+     * or already in progress. Sorts by distance — closest chunks first.
      */
     private void scheduleNeededChunks(int centerCX, int centerCY, int centerCZ) {
         List<ChunkPos> needed = new ArrayList<>();
@@ -255,11 +329,10 @@ public class World {
             for (int cz = centerCZ - RENDER_DISTANCE_H; cz <= centerCZ + RENDER_DISTANCE_H; cz++) {
                 int dx = cx - centerCX;
                 int dz = cz - centerCZ;
-                // Circular horizontal check — skip corners of the square range
                 if (dx * dx + dz * dz > RENDER_DISTANCE_H * RENDER_DISTANCE_H) continue;
 
                 for (int cy = centerCY - RENDER_DISTANCE_V; cy <= centerCY + RENDER_DISTANCE_V; cy++) {
-                    if (cy < 0) continue; // nothing exists below world y=0
+                    if (cy < 0) continue;
                     ChunkPos pos = new ChunkPos(cx, cy, cz);
                     if (!chunks.containsKey(pos) && !inProgress.contains(pos)) {
                         needed.add(pos);
@@ -268,7 +341,6 @@ public class World {
             }
         }
 
-        // Closest chunks first — better pop-in experience
         needed.sort(Comparator.comparingInt(p -> {
             int dx = p.x() - centerCX;
             int dy = p.y() - centerCY;
@@ -277,43 +349,33 @@ public class World {
         }));
 
         for (ChunkPos pos : needed) {
+            Map<ChunkPos, Chunk> neighborSnapshot = captureNeighbors(pos);
             inProgress.add(pos);
             generationExecutor.submit(() -> {
                 Chunk chunk = terrainGenerator.generateChunk(pos);
-                pendingChunks.offer(new PendingChunk(pos, chunk));
+                float[] vertices = ChunkMesher.mesh(chunk, pos, neighborSnapshot);
+                pendingChunks.offer(new PendingChunk(pos, chunk, vertices));
             });
         }
     }
 
     /**
-     * Unloads all chunks that are now outside the render distance.
-     * Rebuilds neighbor meshes after each unload so they re-expose
-     * their boundary faces.
+     * Unloads all chunks outside the render distance.
+     * Marks their neighbors dirty so exposed boundary faces are rebuilt async.
      */
     private void unloadDistantChunks(int centerCX, int centerCY, int centerCZ) {
         List<ChunkPos> toUnload = new ArrayList<>();
         for (ChunkPos pos : chunks.keySet()) {
-            if (!isInRange(pos, centerCX, centerCY, centerCZ)) {
-                toUnload.add(pos);
-            }
+            if (!isInRange(pos, centerCX, centerCY, centerCZ)) toUnload.add(pos);
         }
         for (ChunkPos pos : toUnload) {
             chunks.remove(pos);
             Mesh mesh = meshes.remove(pos);
             if (mesh != null) mesh.cleanup();
-            // Neighbors now have exposed boundary faces — rebuild them
-            rebuildNeighbors(pos);
+            markNeighborsDirty(pos);
         }
     }
 
-    /**
-     * Returns true if the given chunk position is within load range of the viewer.
-     *
-     * @param pos      chunk to test
-     * @param centerCX viewer's chunk X
-     * @param centerCY viewer's chunk Y
-     * @param centerCZ viewer's chunk Z
-     */
     private boolean isInRange(ChunkPos pos, int centerCX, int centerCY, int centerCZ) {
         int dx = pos.x() - centerCX;
         int dy = pos.y() - centerCY;
@@ -323,48 +385,71 @@ public class World {
     }
 
     // -------------------------------------------------------------------------
-    // Chunk registration and mesh management
+    // Mesh management
     // -------------------------------------------------------------------------
 
     /**
-     * Registers a chunk, builds its mesh, and rebuilds the six face-adjacent
-     * neighbors that may have emitted stale boundary faces when this position
-     * was absent.
+     * Adds the six face-adjacent neighbors of the given position to the dirty
+     * mesh set. Only neighbors with loaded chunk data are added — no-op for
+     * positions that don't exist in the chunk map.
+     *
+     * @param pos the chunk whose neighbors should be marked dirty
      */
-    private void addChunk(ChunkPos pos, Chunk chunk) {
-        chunks.put(pos, chunk);
-        rebuildMesh(pos);
-        rebuildNeighbors(pos);
+    private void markNeighborsDirty(ChunkPos pos) {
+        ChunkPos[] adjacent = {
+            new ChunkPos(pos.x() - 1, pos.y(), pos.z()),
+            new ChunkPos(pos.x() + 1, pos.y(), pos.z()),
+            new ChunkPos(pos.x(), pos.y() - 1, pos.z()),
+            new ChunkPos(pos.x(), pos.y() + 1, pos.z()),
+            new ChunkPos(pos.x(), pos.y(), pos.z() - 1),
+            new ChunkPos(pos.x(), pos.y(), pos.z() + 1),
+        };
+        for (ChunkPos n : adjacent) {
+            if (chunks.containsKey(n)) dirtyMeshes.add(n);
+        }
     }
 
     /**
-     * Rebuilds meshes for all six face-adjacent neighbors of the given position.
-     * No-op for neighbors that have no chunk data.
+     * Synchronously rebuilds the GPU mesh for the given position.
+     * Only used by {@link #setBlock} — all other mesh rebuilds go through the
+     * async dirty mesh path.
+     *
+     * @param pos the chunk position to rebuild
      */
-    private void rebuildNeighbors(ChunkPos pos) {
-        rebuildMesh(new ChunkPos(pos.x() - 1, pos.y(), pos.z()));
-        rebuildMesh(new ChunkPos(pos.x() + 1, pos.y(), pos.z()));
-        rebuildMesh(new ChunkPos(pos.x(), pos.y() - 1, pos.z()));
-        rebuildMesh(new ChunkPos(pos.x(), pos.y() + 1, pos.z()));
-        rebuildMesh(new ChunkPos(pos.x(), pos.y(), pos.z() - 1));
-        rebuildMesh(new ChunkPos(pos.x(), pos.y(), pos.z() + 1));
-    }
-
-    /**
-     * Regenerates the GPU mesh for the chunk at the given position.
-     * Deletes the existing mesh first if one exists.
-     * No-op if no chunk data exists at this position.
-     */
-    private void rebuildMesh(ChunkPos pos) {
+    private void rebuildMeshSync(ChunkPos pos) {
         Chunk chunk = chunks.get(pos);
         if (chunk == null) return;
 
         Mesh old = meshes.remove(pos);
         if (old != null) old.cleanup();
 
-        float[] vertices = ChunkMesher.mesh(chunk, pos, this);
+        float[] vertices = ChunkMesher.mesh(chunk, pos, captureNeighbors(pos));
         if (vertices.length > 0) {
             meshes.put(pos, new Mesh(vertices));
         }
+    }
+
+    /**
+     * Captures a snapshot of the six face-adjacent neighbor chunks.
+     * Must be called on the main thread — reads from the live chunk map.
+     *
+     * @param pos the chunk to capture neighbors for
+     * @return map of loaded neighbors — may be empty if none are loaded
+     */
+    private Map<ChunkPos, Chunk> captureNeighbors(ChunkPos pos) {
+        Map<ChunkPos, Chunk> neighbors = new HashMap<>();
+        ChunkPos[] adjacent = {
+            new ChunkPos(pos.x() - 1, pos.y(), pos.z()),
+            new ChunkPos(pos.x() + 1, pos.y(), pos.z()),
+            new ChunkPos(pos.x(), pos.y() - 1, pos.z()),
+            new ChunkPos(pos.x(), pos.y() + 1, pos.z()),
+            new ChunkPos(pos.x(), pos.y(), pos.z() - 1),
+            new ChunkPos(pos.x(), pos.y(), pos.z() + 1),
+        };
+        for (ChunkPos n : adjacent) {
+            Chunk c = chunks.get(n);
+            if (c != null) neighbors.put(n, c);
+        }
+        return neighbors;
     }
 }

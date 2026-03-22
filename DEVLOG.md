@@ -857,6 +857,194 @@ quads need tiling UVs.
 
 ---
 
+## Entry 019 — Meshing Moved to Worker Thread
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Moved ChunkMesher.mesh() from the main thread to the worker thread.
+  Worker now does: generateChunk() + mesh() → float[] vertices.
+  Main thread now only does: new Mesh(vertices) + rebuildNeighbors().
+- Thread safety achieved without locks: at submission time the main thread
+  captures a snapshot of the 6 face-adjacent neighbor chunks into a HashMap.
+  The worker receives this snapshot and never touches the live chunks map.
+- ChunkMesher signature changed from mesh(Chunk, ChunkPos, World) to
+  mesh(Chunk, ChunkPos, Map<ChunkPos, Chunk>). isAirAt() now queries the
+  neighbor snapshot instead of World directly.
+- World.rebuildMesh() (main thread, setBlock and neighbor rebuilds) builds
+  its own neighbor snapshot via captureNeighbors() before calling the mesher.
+- PendingChunk record updated to carry (pos, chunk, vertices) — worker
+  produces both the block data and the pre-built vertex array.
+- MAX_UPLOADS_PER_FRAME = 4 retained — each upload now also triggers up to
+  6 neighbor rebuilds on the main thread, so capping is still useful.
+
+### Decisions Made
+- Snapshot approach preferred over locks or ConcurrentHashMap — cleaner,
+  no contention, and naturally extends to the thread pool case. Each worker
+  task is fully self-contained with zero shared state access.
+- Upgrade path to thread pool: replace newSingleThreadExecutor with
+  newFixedThreadPool(N). No other changes needed — architecture already supports it.
+- Slightly stale neighbor snapshots are acceptable: if a block is placed
+  between submission and completion, setBlock's rebuildMesh call corrects
+  the boundary immediately after.
+
+### Problems Encountered
+- Geometry identical to before on first run. However some stutters still persist.
+
+### AI Assistance Notes
+- Claude designed and wrote both files.
+
+### Lessons / Observations
+- The key insight: thread safety doesn't require synchronization if you
+  eliminate sharing. Capturing an immutable snapshot before submission means
+  the worker has everything it needs with no coordination overhead.
+- rebuildNeighbors on the main thread is still the limiting factor for
+  very fast movement — deferred until it proves to be a measurable problem.
+
+---
+
+## Entry 020 — Async Neighbor Remesh Path
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Identified root cause of remaining stutters: rebuildNeighbors() was still
+  calling ChunkMesher.mesh() synchronously on the main thread. With 4 uploads
+  per frame × 6 neighbors each = up to 24 synchronous mesh builds per frame.
+- Added dirty mesh set and async remesh path. When a chunk loads or unloads,
+  its neighbors are added to dirtyMeshes instead of being rebuilt immediately.
+  processDirtyMeshes() submits them to the worker; results land in
+  pendingRemeshes and are drained separately (MAX_REMESHES_PER_FRAME = 8).
+- setBlock retains synchronous mesh rebuild — player-triggered, infrequent,
+  affects at most 7 chunks.
+- Main thread now only calls new Mesh() (GPU buffer allocation) — no
+  ChunkMesher.mesh() calls outside of setBlock.
+
+### Decisions Made
+- Separate caps for new chunks (4) and remeshes (8) — prevents remeshes from
+  starving new chunk uploads and vice versa.
+- remeshInProgress set prevents the same position being submitted to the worker
+  multiple times while a result is already in flight.
+- Stale remesh results (chunk unloaded before result arrives) are discarded
+  on drain via the chunks.containsKey() check.
+- Known limitation: boundary faces are briefly incorrect for a few frames
+  after a chunk loads, until the async neighbor remesh completes. Visually
+  a fraction of a second at 120fps.
+
+### Lessons / Observations
+- The pattern "move CPU work off the main thread, main thread only does GPU
+  calls" is the correct architecture for any streaming voxel engine.
+- Each optimization revealed the next bottleneck — generation → meshing →
+  neighbor rebuilds. This is the last synchronous mesh build in the hot path.
+
+---
+
+## Entry 021 — Terrain Generation and Meshing Optimizations
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Added chunk-level early exits to TerrainGenerator. Before sampling any
+  noise, the chunk's Y range is compared against [MIN_SURFACE_Y, MAX_SURFACE_Y].
+  Chunks entirely above the max surface return immediately as all-air.
+  Chunks entirely below the min surface return immediately as all-stone.
+  Only chunks intersecting the surface band require per-column noise evaluation.
+- Replaced List<Float> with a manually grown float[] in ChunkMesher.
+  List<Float> boxes every float into a heap-allocated Float object — for a
+  busy chunk this is tens of thousands of allocations per mesh build.
+  The float[] buffer starts at a reasonable capacity and doubles when full,
+  same growth strategy as ArrayList but with no boxing overhead.
+- buildMergedQuads() now returns a flat int[] (5 ints per quad) instead of
+  List<int[]>, eliminating int[] object allocations per quad.
+
+### Decisions Made
+- Early exits are the more impactful of the two changes — at render distance
+  16 with 12 vertical levels, the majority of chunks are pure air or pure
+  stone and now cost near-zero generation time.
+- float[] buffer initial capacity set at 1024 quads × 36 floats = 36864.
+  Covers most surface chunks without reallocation; doubles automatically
+  for worst-case dense chunks.
+
+### Lessons / Observations
+- The most expensive thing in any system is work you never needed to do.
+  Chunk-level early exits eliminate noise sampling for ~70% of chunks.
+- Autoboxing in hot paths is a common Java performance hazard — List<Float>
+  is convenient but inappropriate for tight mesh-building loops.
+
+---
+
+## Entry 021 — Thread Pool Upgrade
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Replaced newSingleThreadExecutor with newFixedThreadPool(availableProcessors - 1).
+  Leaves one core for the main/render thread, uses all remaining cores for chunk
+  generation and meshing. On a quad-core with hyperthreading this is 7 concurrent
+  workers instead of 1.
+
+### Decisions Made
+- availableProcessors - 1 is the standard formula for CPU-bound worker pools.
+  Reserving one core prevents the worker threads from starving the render loop.
+- No other code changes were needed — the neighbor snapshot architecture already
+  made each task fully self-contained with zero shared state.
+
+### Lessons / Observations
+- The single-threaded executor was always the bottleneck for initial load.
+  The snapshot-based design paid off here — parallelism came for free.
+
+---
+
+## Phase 4 Roadmap — Remaining Work
+
+### Completed
+- Neighbor-aware chunk meshing (correctness fix)
+- Window drag freeze fix (GLFWWindowRefreshCallback)
+- Neighbor rebuild sequencing fix (rebuildNeighbors on addChunk)
+- Frustum culling with chunk counter
+- Indexed rendering (EBO)
+- Greedy meshing
+- Chunk streaming with background generation (render distance 16)
+- Meshing moved to worker thread (neighbor snapshot for thread safety)
+- Async neighbor remesh path (all ChunkMesher calls off main thread)
+- Thread pool (availableProcessors - 1 workers)
+- Terrain early exits for air/stone chunks
+- Float[] buffer in ChunkMesher (no boxing)
+
+### Remaining (in priority order)
+
+**1. Ambient occlusion** *(next up)*
+Bake per-vertex corner darkening into vertex colors at mesh-build time.
+At each vertex, count how many of the surrounding corner blocks are solid
+and darken proportionally. Large visual impact, zero runtime cost, no separate
+light system required. Integrates into ChunkMesher — runs on worker thread
+naturally. Needs to happen before textures since AO affects vertex data layout.
+
+**2. Textures**
+UV attribute in Mesh (layout location 2), texture atlas loaded via STB,
+sampler2D uniform in shader, UV lookup per block type per face in ChunkMesher.
+Greedy meshing must be revisited — merged quads need tiling UVs.
+IMPORTANT: partial block types (stairs, slabs) will break greedy merging and
+face occlusion culling. When partial blocks are introduced, Block needs an
+occludesFace() method and the mesher needs a fallback per-block path for
+non-full blocks.
+
+### Deferred to Phase 5+
+- Full light propagation (block lights + skylight + dynamic updates)
+- LOD / distant rendering
+- Caves (3D noise density functions)
+- Multiplayer: World.update() → update(Collection<Vector3f>), World moves
+  to Server class, GameLoop becomes client-side rendering loop
+
+### Performance note
+Generation speed on Ryzen 3550H is hardware-limited at this render distance.
+The architecture is correct — all CPU work is off the main thread, tasks are
+parallel, and unnecessary work is skipped via early exits. Further gains would
+require either reducing render distance or optimizing the noise function itself
+(e.g. pre-computing height maps per chunk column rather than per block).
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

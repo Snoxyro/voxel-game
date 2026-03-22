@@ -7,10 +7,18 @@ import com.voxelgame.util.OpenSimplex2S;
  * multiple octaves of OpenSimplex2 noise layered at increasing frequencies
  * and decreasing amplitudes.
  *
- * <p>Chunks are generated in 3D space. For a given chunk, only blocks whose
- * world-space Y coordinate falls within the chunk's Y range are filled.
- * Chunks fully above the surface are left as air; chunks fully below are
- * filled with STONE.
+ * <h3>Chunk-level early exits</h3>
+ * Before sampling any noise, the chunk's world-space Y range is compared against
+ * the theoretical surface height bounds [BASE_HEIGHT, BASE_HEIGHT + HEIGHT_VARIATION].
+ * <ul>
+ *   <li>Chunks entirely above the maximum possible surface → returned as all-air
+ *       immediately with no noise sampling.</li>
+ *   <li>Chunks entirely below the minimum possible surface → returned as all-stone
+ *       immediately with no noise sampling.</li>
+ * </ul>
+ * At render distance 16 with 12 vertical chunk levels, the majority of chunks fall
+ * into one of these two cases. Only the thin band of chunks that intersect the
+ * actual surface require per-column noise evaluation.
  */
 public class TerrainGenerator {
 
@@ -19,7 +27,7 @@ public class TerrainGenerator {
 
     /**
      * The maximum total height variation across all octaves combined.
-     * The actual range is [BASE_HEIGHT, BASE_HEIGHT + HEIGHT_VARIATION].
+     * Actual surface range: [BASE_HEIGHT, BASE_HEIGHT + HEIGHT_VARIATION].
      */
     private static final int HEIGHT_VARIATION = 36;
 
@@ -49,6 +57,18 @@ public class TerrainGenerator {
      */
     private static final double PERSISTENCE = 0.5;
 
+    /**
+     * Minimum possible surface Y. Any chunk whose top face is below this
+     * is guaranteed to be entirely stone — no noise needed.
+     */
+    private static final int MIN_SURFACE_Y = BASE_HEIGHT;
+
+    /**
+     * Maximum possible surface Y. Any chunk whose bottom face is above this
+     * is guaranteed to be entirely air — no noise needed.
+     */
+    private static final int MAX_SURFACE_Y = BASE_HEIGHT + HEIGHT_VARIATION;
+
     private final long seed;
 
     /**
@@ -62,16 +82,37 @@ public class TerrainGenerator {
 
     /**
      * Generates and returns a chunk at the given 3D grid position.
-     * Only blocks within this chunk's world-space Y range are filled.
+     *
+     * <p>Applies chunk-level early exits before any noise sampling:
+     * chunks entirely above the max surface are returned as air,
+     * chunks entirely below the min surface are returned as stone.
+     * Only chunks that intersect the surface band require per-column noise.
      *
      * @param pos the chunk's 3D grid coordinate
      * @return a new Chunk with terrain blocks filled in for this Y slice
      */
     public Chunk generateChunk(ChunkPos pos) {
-        Chunk chunk = new Chunk();
+        int chunkWorldY    = pos.worldY();
+        int chunkWorldYTop = chunkWorldY + Chunk.SIZE - 1;
 
-        // The world-space Y range this chunk is responsible for
-        int chunkWorldY      = pos.worldY();
+        // Early exit: chunk is entirely above the highest possible surface
+        if (chunkWorldY > MAX_SURFACE_Y) {
+            return new Chunk(); // all air by default
+        }
+
+        // Early exit: chunk is entirely below the lowest possible surface.
+        // Fill completely with stone — no noise needed.
+        if (chunkWorldYTop < MIN_SURFACE_Y) {
+            Chunk chunk = new Chunk();
+            for (int x = 0; x < Chunk.SIZE; x++)
+                for (int y = 0; y < Chunk.SIZE; y++)
+                    for (int z = 0; z < Chunk.SIZE; z++)
+                        chunk.setBlock(x, y, z, Block.STONE);
+            return chunk;
+        }
+
+        // This chunk intersects the surface band — evaluate noise per column
+        Chunk chunk = new Chunk();
 
         for (int x = 0; x < Chunk.SIZE; x++) {
             for (int z = 0; z < Chunk.SIZE; z++) {
@@ -79,16 +120,15 @@ public class TerrainGenerator {
                 int worldX = pos.worldX() + x;
                 int worldZ = pos.worldZ() + z;
 
-                double noiseVal     = fbm(worldX, worldZ);
-                int surfaceHeight   = BASE_HEIGHT + (int) ((noiseVal + 1.0) / 2.0 * HEIGHT_VARIATION);
+                double noiseVal   = fbm(worldX, worldZ);
+                int surfaceHeight = BASE_HEIGHT + (int) ((noiseVal + 1.0) / 2.0 * HEIGHT_VARIATION);
 
-                // Early exit: chunk is entirely above the surface — leave as air
+                // Early exit: entire column in this chunk is above surface
                 if (chunkWorldY > surfaceHeight) continue;
 
                 for (int y = 0; y < Chunk.SIZE; y++) {
                     int worldY = chunkWorldY + y;
 
-                    // Above surface — air (default, skip)
                     if (worldY > surfaceHeight) continue;
 
                     Block block;
