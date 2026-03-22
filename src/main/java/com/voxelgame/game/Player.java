@@ -1,5 +1,6 @@
 package com.voxelgame.game;
 
+import com.voxelgame.common.world.BlockView;
 import com.voxelgame.common.world.PhysicsBody;
 import org.joml.Vector3f;
 
@@ -49,8 +50,7 @@ public class Player {
      * @param world     the world for collision queries
      * @param deltaTime seconds per tick
      */
-    public void update(float moveX, float moveZ, boolean wantsJump,
-                    World world, float deltaTime) {
+    public void update(float moveX, float moveZ, boolean wantsJump, BlockView world, float deltaTime){
         float len = (float) Math.sqrt(moveX * moveX + moveZ * moveZ);
         if (len > 0.001f) {
             moveX = (moveX / len) * WALK_SPEED;

@@ -1,6 +1,5 @@
 package com.voxelgame.common.world;
 
-import com.voxelgame.game.World;
 import org.joml.Vector3f;
 
 /**
@@ -30,8 +29,7 @@ public class RayCaster {
      * @param maxDistance maximum ray length in blocks
      * @return a hit result, or {@link RaycastResult#miss()} if nothing was found
      */
-    public static RaycastResult cast(Vector3f origin, Vector3f direction,
-                                     World world, float maxDistance) {
+    public static RaycastResult cast(Vector3f origin, Vector3f direction, BlockView world, float maxDistance){
 
         // Starting voxel — Math.floor handles negative coords correctly,
         // unlike a plain (int) cast which truncates toward zero.

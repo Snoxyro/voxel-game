@@ -1574,6 +1574,185 @@ Main.java launches embedded GameServer + GameClient on the same JVM. ServerMain.
 
 ---
 
+## Entry 031 — Phase 5A: Package Restructure + Netty Handshake/Login
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Moved six classes from `com.voxelgame.game` to `com.voxelgame.common.world`:
+  `Block`, `Chunk`, `ChunkPos`, `PhysicsBody`, `RayCaster`, `RaycastResult`.
+  Updated all imports across the project. No logic changes.
+- Added Netty 4.1.115.Final to `build.gradle` as the network library.
+- Added `runServer` Gradle task — runs `ServerMain` headless with no window.
+- Created `com.voxelgame.common.network` package:
+  - `Packet` — marker interface for all packet types
+  - `PacketId` — enum of all wire IDs (serverbound 0x00–0x0F, clientbound 0x10–0x1F)
+  - `PacketEncoder` — Netty `MessageToByteEncoder`, serializes `Packet` → `ByteBuf`
+  - `PacketDecoder` — Netty `MessageToMessageDecoder`, deserializes `ByteBuf` → `Packet`
+- Created three Phase 5A packets: `HandshakePacket`, `LoginRequestPacket`, `LoginSuccessPacket`.
+- Created `com.voxelgame.server` package:
+  - `GameServer` — owns Netty server, minimal Phase 5A game loop stub
+  - `ServerMain` — headless dedicated server entry point
+  - `ServerNetworkManager` — Netty `ServerBootstrap`, one `ClientHandler` per connection
+  - `ClientHandler` — server-side state machine (HANDSHAKING → LOGGING_IN → PLAYING)
+- Created `com.voxelgame.client.network` package:
+  - `ClientNetworkManager` — Netty `Bootstrap`, connects to server
+  - `ServerHandler` — client-side handler, sends Handshake+Login on `channelActive`
+- Updated `Main.java` to launch embedded `GameServer` on a daemon thread, wait for
+  port bind via `CountDownLatch`, connect `ClientNetworkManager`, then run `GameLoop`.
+
+### Protocol Details
+- Wire format: `[4-byte length][1-byte packet ID][payload]`
+- `LengthFieldBasedFrameDecoder` / `LengthFieldPrepender` handle TCP framing
+- `TCP_NODELAY` enabled on all channels — packets sent immediately, no Nagle buffering
+- Default port: **24463** (unassigned by IANA, no conflicts with known services)
+- All Netty I/O runs on dedicated NIO threads; game logic never blocks on socket reads
+
+### Decisions Made
+- `netty-all` artifact for simplicity; can be replaced with three individual modules
+  (`netty-transport`, `netty-codec`, `netty-handler`) if linking issues arise
+- Singleplayer = embedded server on `localhost` — identical to Minecraft's integrated
+  server model. No separate singleplayer code path will ever exist.
+- `CountDownLatch` for server-ready synchronization — deterministic, no `Thread.sleep()`
+
+### Problems Encountered
+- None. First run produced the expected login exchange in the console and the game
+  window opened and played identically to Phase 4.
+
+### AI Assistance Notes
+- Claude wrote all new files with Netty pipeline explanation from first principles.
+- Copilot handled the mechanical package restructure (file moves, import updates).
+
+### Lessons / Observations
+- Netty's pipeline abstraction (decode → handle → encode) makes adding new packet types
+  a one-file change to the encoder and decoder — handlers never touch bytes.
+- `CountDownLatch` is the correct primitive for "wait until ready" between threads.
+  `Thread.sleep()` is always wrong for this.
+
+---
+
+## Entry 032 — Phase 5B: Chunk Streaming Over TCP
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Added `BlockView` interface to `common/world/` — single method `getBlock(x, y, z)`.
+  Both `World` (server) and `ClientWorld` (client) implement it. `PhysicsBody`,
+  `RayCaster`, and `Player` now depend on `BlockView` instead of `World`, making
+  them usable on both sides with no duplication.
+- **Stripped `World.java` of all mesh/GL code** — this was the critical architectural
+  fix. `World` now has one job: chunk data management. Removed: `meshes` map, all
+  `Mesh` imports, `dirtyMeshes`, `remeshInProgress`, `pendingRemeshes`, `PendingRemesh`,
+  `drainPendingRemeshes()`, `processDirtyMeshes()`, `rebuildMeshSync()`, `render()`.
+  Worker thread now generates terrain only — no `ChunkMesher.mesh()` on the server.
+- Added `Chunk.toBytes()` and `Chunk.fromBytes(byte[])` — serialize/deserialize the
+  4096-byte flat block array. Used for network transmission; will reuse for disk
+  persistence in Phase 5E.
+- Added `World.getChunk(ChunkPos)` and `World.getLoadedChunkPositions()` for
+  `ServerWorld` access.
+- Added two new packets: `ChunkDataPacket` (cx, cy, cz, 4096 bytes) and
+  `UnloadChunkPacket` (cx, cy, cz). Updated `PacketEncoder` and `PacketDecoder`.
+- Created `PlayerSession` — per-client server state: channel, position, loaded chunk set.
+  Methods: `sendPacket()`, `hasChunk()`, `markChunkLoaded()`, `markChunkUnloaded()`.
+- Created `ServerWorld` — wraps `World`, drives chunk streaming per player. On each
+  20 TPS tick: drains player connect/disconnect queues, calls `world.update()`,
+  sends `ChunkDataPacket` for newly loaded chunks (capped at 16/player/tick),
+  sends `UnloadChunkPacket` for chunks the server unloaded.
+- Upgraded `GameServer` with a proper 20 TPS game loop. On login: creates
+  `PlayerSession`, registers with `ServerWorld`. On disconnect: removes player.
+- Created `ClientWorld` — client-side `BlockView` and renderer. Receives chunk data
+  from the Netty I/O thread via thread-safe queues. Meshes chunks on worker threads
+  (same pattern as old `World`). Uploads `Mesh` objects on the main GL thread only.
+  Implements the same 26-neighbor AO snapshot for `ChunkMesher`.
+- Updated `GameLoop` to accept `ClientWorld` as a constructor argument. Removed
+  local `World` ownership. `clientWorld.update()` drains pending mesh builds each
+  tick; `clientWorld.render()` replaces `world.render()`.
+- Updated `ServerHandler` and `ClientNetworkManager` to accept `ClientWorld`.
+- Updated `Main.java` to construct `ClientWorld` first, pass it to both
+  `ClientNetworkManager` and `GameLoop`.
+
+### Architecture — The GL Thread Rule
+The crash encountered during implementation was caused by `ServerWorld` calling
+`world.update()`, which still contained `new Mesh(vertices)` — a GL call — on the
+`embedded-server` thread which has no OpenGL context. Windows/NVIDIA crashes hard on
+this with `EXCEPTION_ACCESS_VIOLATION` inside `lwjgl_opengl.dll`.
+
+The fix was to strip all mesh/GL code from `World` entirely rather than add a mode
+flag. The boundary is now absolute:
+- `World` and `ServerWorld` → zero engine imports, zero GL calls, ever
+- `ClientWorld` → owns all meshing and rendering
+
+### Phase 5B Milestone Result
+```
+[Server] Listening on port 24463
+[Client] Login successful — playerId=1, spawn=(64.0, 70.0, 64.0)
+FPS: 27  | Chunks: 12/120    ← initial load
+FPS: 121 | Chunks: 1762/1762 ← fully loaded, stable
+Engine shut down cleanly.
+```
+120 FPS maintained throughout. Physics, freecam, and camera work against `ClientWorld`.
+Block interaction disabled pending Phase 5C.
+
+### Known Limitation (expected, resolved in Phase 5D)
+The server streams chunks around the player's spawn position only. When the player
+moves, the server doesn't know — `PlayerMove` packets don't exist until Phase 5D.
+The streaming center doesn't follow the player. All chunks loaded are correct; the
+load area just stays anchored to spawn for now.
+
+### AI Assistance Notes
+- Claude wrote all new files. Copilot wrote the three mechanical files (`ChunkDataPacket`,
+  `UnloadChunkPacket`, `PlayerSession`).
+- The GL crash was diagnosed by Copilot from the native crash log and confirmed by
+  Claude. Fix was Claude's (strip GL from `World` entirely rather than add a mode flag).
+
+### Lessons / Observations
+- The CLAUDE.md architecture rule "all GL calls on the main thread" applies to the
+  server thread just as much as any worker thread — the server thread has no GL
+  context at all. Any `engine` import in the `server` package is a bug.
+- `Chunk.toBytes()` / `Chunk.fromBytes()` will be reused verbatim for disk persistence
+  in Phase 5E — designing network and persistence serialization together avoids doing
+  the work twice.
+- Chunk streaming cap (16/player/tick) prevents flooding a new client with hundreds
+  of large packets in a single tick. Without the cap, the Netty write buffer fills
+  and back-pressure can cause frame hitches on the main thread.
+
+---
+
+## Phase 5 Roadmap — Updated Status
+
+### Completed
+- 5A — Package restructure + Netty + handshake/login
+- 5B — Chunk streaming (server generates, client renders via TCP)
+
+### Remaining (in priority order)
+
+**5C — Block interaction sync** *(next up)*
+Client sends `BlockBreakPacket` / `BlockPlacePacket`. Server validates, updates
+`ServerWorld`, broadcasts `BlockChangePacket` to all clients in range. Client's
+`ServerHandler` receives `BlockChangePacket` and calls a new `ClientWorld.applyBlockChange()`
+which queues a local block update and dirty-marks affected chunks for remeshing.
+Milestone: two clients see each other's block edits in real time.
+
+**5D — Player movement sync + client-side prediction**
+Client sends `PlayerMovePacket` every tick. Server updates `PlayerSession` position
+(fixing the streaming-center-stuck-at-spawn issue). Server broadcasts other players'
+positions. `RemotePlayer` with interpolation renders other players smoothly.
+Client-side prediction + server reconciliation for local player.
+Milestone: streaming center follows player; two clients see each other moving.
+
+**5E — World persistence**
+Server saves modified chunks to disk on block change and on shutdown. Loads saved
+chunks from disk before generating. One file per chunk (`chunks/cx_cy_cz.dat`).
+Milestone: break blocks, restart server, blocks remain.
+
+**5F — Singleplayer integration cleanup**
+Properly split `GameLoop` into `GameClient`. Move `engine/` under `client/engine/`
+or leave as-is (decision deferred). `ServerMain` for dedicated server. `Main` for
+singleplayer. Wire up world folder selection and username from CLI args.
+Milestone: `./gradlew run` = singleplayer, `./gradlew runServer` = dedicated server.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

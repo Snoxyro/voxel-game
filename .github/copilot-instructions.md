@@ -1,10 +1,10 @@
 # Copilot Instructions — Voxel Game Engine
 
 ## Project Overview
-This is a voxel game engine built with Java 21 and LWJGL 3. It is a long-term learning
-project exploring engine architecture, graphics programming, and the boundaries of
-AI-assisted development. The goal is a feature-complete voxel game with multiplayer,
-modding support, and high performance.
+A voxel game engine with client/server multiplayer architecture, built in Java 21
+with LWJGL 3 and Netty. Long-term learning project exploring engine architecture,
+graphics programming, networking, and AI-assisted development. Target: a feature-complete
+voxel game with multiplayer, world persistence, and modding support.
 
 ## Technology Stack
 - **Language:** Java 21
@@ -13,42 +13,107 @@ modding support, and high performance.
 - **Windowing:** GLFW via LWJGL
 - **Math:** JOML (Java OpenGL Math Library)
 - **Audio:** OpenAL via LWJGL
+- **Networking:** Netty 4.1.115.Final (TCP, NIO event loop, pipeline codec)
 
 ## Package Structure
-- `com.voxelgame.engine` — Core engine systems: renderer, window, game loop, ECS
-- `com.voxelgame.game` — Gameplay logic: world, chunks, player, entities
-- `com.voxelgame.util` — Shared utilities: logging, math helpers, resource loading
+```
+com.voxelgame.
+├── Main.java                  ← singleplayer entry (embedded server + client)
+├── common/
+│   ├── world/                 ← shared types: Block, BlockView, Chunk, ChunkPos,
+│   │                             PhysicsBody, RayCaster, RaycastResult
+│   └── network/               ← wire protocol: Packet, PacketId, encoder, decoder, packet records
+├── server/                    ← headless server — ZERO engine/GL imports
+│   ├── ServerMain.java
+│   ├── GameServer.java        ← 20 TPS game loop
+│   ├── PlayerSession.java
+│   ├── ServerWorld.java
+│   └── network/               ← ServerNetworkManager, ClientHandler
+├── client/                    ← client-side logic
+│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders
+│   └── network/               ← ClientNetworkManager, ServerHandler
+├── engine/                    ← GL/GLFW systems — client main thread only
+│   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, etc.
+└── game/                      ← server-side gameplay
+    └── World (chunk data only — NO GL), TerrainGenerator, ChunkMesher, Player
+```
 
 ## Architecture Principles
-- Engine and game logic must remain strictly separated. Nothing in `engine` should
-  import from `game`.
-- All OpenGL calls must be made on the main thread only.
-- Use abstraction interfaces for renderer, mesh, and shader — future Vulkan backend
-  compatibility is a long-term goal.
-- Prefer composition over inheritance. ECS (Entity Component System) is the target
-  architecture for entities.
-- No magic numbers. All constants belong in dedicated constants classes.
+
+### The Most Important Rule: Server Has No GL Context
+The `server/` package and `game/World.java` must never import anything from `engine/`.
+The server thread has no OpenGL context. Any GL call from a non-main thread causes
+a native crash with no useful Java stack trace. If Copilot is editing server-side code
+and wants to add a `Mesh` or `ShaderProgram` — that is always wrong.
+
+### GL Calls on Main Thread Only
+All OpenGL calls (`GL11.*`, `GL30.*`, `new Mesh()`, etc.) must occur on the main
+thread only. Worker threads run `ChunkMesher.mesh()` (pure CPU). The main thread
+picks up results and calls `new Mesh(vertices)`. This rule applies to `ClientWorld`
+as well — `drainPendingMeshes()` must only be called from the main thread.
+
+### BlockView Interface
+`PhysicsBody`, `RayCaster`, and `Player` accept `BlockView` (not `World` or
+`ClientWorld`). Both `World` and `ClientWorld` implement `BlockView`. Never change
+these to accept a concrete type — that would break the client/server separation.
+
+### Network Protocol
+Wire format: `[4-byte length][1-byte packet ID][payload]`. When adding a new packet:
+1. Add an ID to `PacketId` enum
+2. Create a record in `common/network/packets/` implementing `Packet`
+3. Add a serialization branch to `PacketEncoder`
+4. Add a deserialization branch to `PacketDecoder`
+All four files must be updated together.
+
+### Singleplayer = Embedded Server
+`Main.java` starts `GameServer` on a daemon thread, waits for the port to bind,
+then connects `ClientNetworkManager` and runs `GameLoop`. No separate singleplayer
+code path. Ever.
+
+### Engine/Game Separation
+`engine/` never imports from `game/` or `server/`. `game/` never imports from
+`engine/`. `server/` never imports from `engine/`. `common/` never imports from
+any of the others.
+
+### Composition Over Inheritance
+ECS is the target architecture. `PhysicsBody` is owned by `Player` as a component.
+No deep inheritance hierarchies.
+
+### Thread Handoff via Concurrent Queues
+Netty I/O threads write into `ConcurrentLinkedQueue`s. The main thread or server
+tick thread drains them. Never pass live mutable state between threads — always
+capture a snapshot before handing work to a background thread.
 
 ## Code Style
-- Standard Java naming conventions strictly followed.
-- Every public class and method must have a Javadoc comment.
-- No raw types. Generics must be fully specified.
-- Prefer explicit error handling over silent catches. Log all exceptions with context.
-- Resource management: all OpenGL resources must be explicitly cleaned up in a
-  `cleanup()` method. Use try-with-resources where applicable.
+- Standard Java naming conventions
+- Every public class and method must have a Javadoc comment
+- No raw types — generics fully specified
+- Explicit error handling, no silent catches — log all exceptions with context
+- No magic numbers — constants in dedicated constants classes or at top of file
+- All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 0 — Foundation. Focus is on: window creation, OpenGL context initialization,
-game loop, basic shader loading, and drawing a triangle.
+Phase 5 — Multiplayer. Sub-phase 5C (next): block interaction sync.
+- 5A done: package restructure, Netty, handshake/login
+- 5B done: chunk streaming (server generates, client receives and renders)
+- 5C next: `BlockBreakPacket` / `BlockPlacePacket` → server validates → `BlockChangePacket` broadcast
+- 5D: player movement sync, client-side prediction
+- 5E: world persistence
+- 5F: singleplayer integration cleanup
 
 ## Key Constraints
-- OpenGL calls on main thread only — never pass GL calls to worker threads.
-- Chunk mesh generation happens on worker threads, but mesh upload to GPU happens
-  on the main thread.
-- Memory: target under 4GB heap usage. JVM args set to -Xmx4G.
+- Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`
+- GL calls on main thread only — never pass GL calls to worker or Netty threads
+- Chunk mesh generation on worker threads; `new Mesh(vertices)` on main thread only
+- `BlockView` interface must remain the abstraction for physics/raycasting
+- Netty I/O threads must only write to concurrent queues — never touch GL or chunk maps
+- Default port: 24463
 
-## What NOT to do
-- Do not suggest switching to Maven. Gradle is the build tool for this project.
-- Do not suggest Vulkan. OpenGL 4.5 is the current renderer target.
-- Do not introduce Spring, Jakarta, or any web framework dependencies.
-- Do not use deprecated LWJGL 2 APIs. All LWJGL usage must be LWJGL 3 style.
+## What NOT to Do
+- Do not suggest switching to Maven
+- Do not suggest Vulkan (OpenGL 4.5 is current target)
+- Do not introduce Spring, Jakarta, or any web framework
+- Do not use deprecated LWJGL 2 APIs
+- Do not add `Mesh`, `ShaderProgram`, or any `engine/` import to `server/` code
+- Do not add rendering code to `World.java` or `ServerWorld.java`
+- Do not call `new Mesh()` outside the main thread

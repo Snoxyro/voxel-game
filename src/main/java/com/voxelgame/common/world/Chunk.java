@@ -1,5 +1,7 @@
 package com.voxelgame.common.world;
 
+import java.util.Arrays;
+
 /**
  * Represents a fixed-size 3D chunk of blocks.
  *
@@ -170,5 +172,38 @@ public class Chunk {
         return x >= 0 && x < SIZE
             && y >= 0 && y < SIZE
             && z >= 0 && z < SIZE;
+    }
+
+    /**
+     * Returns a copy of the raw block ordinal array for network transmission and persistence.
+     * The format matches {@link #fromBytes}: index = x*SIZE*SIZE + y*SIZE + z, value = ordinal.
+     *
+     * @return a 4096-byte defensive copy of the internal block array
+     */
+    public byte[] toBytes() {
+        return Arrays.copyOf(blocks, blocks.length);
+    }
+
+    /**
+     * Reconstructs a Chunk from raw bytes produced by {@link #toBytes()}.
+     * AIR blocks (ordinal 0) are skipped — they are the default.
+     * Correctly maintains solidCount and Y occupancy range via setBlock.
+     *
+     * @param data 4096 bytes — must be exactly SIZE³ in length
+     * @return a new Chunk with all blocks set
+     */
+    public static Chunk fromBytes(byte[] data) {
+        if (data.length != SIZE * SIZE * SIZE)
+            throw new IllegalArgumentException("Invalid chunk data length: " + data.length);
+        Chunk chunk = new Chunk();
+        for (int i = 0; i < data.length; i++) {
+            int ordinal = data[i] & 0xFF;
+            if (ordinal == 0) continue; // AIR is the default — skip for speed
+            int x = i / (SIZE * SIZE);
+            int y = (i % (SIZE * SIZE)) / SIZE;
+            int z = i % SIZE;
+            chunk.setBlock(x, y, z, BLOCK_VALUES[ordinal]);
+        }
+        return chunk;
     }
 }

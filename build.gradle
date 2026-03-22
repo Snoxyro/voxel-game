@@ -17,6 +17,7 @@ repositories {
 
 def lwjglVersion = '3.3.4'
 def jomlVersion  = '1.10.7'
+def nettyVersion = '4.1.115.Final'
 def lwjglNatives = 'natives-windows'
 
 dependencies {
@@ -38,6 +39,9 @@ dependencies {
 
     // Math library (vectors, matrices, quaternions)
     implementation "org.joml:joml:${jomlVersion}"
+
+    // Networking — TCP framing, NIO, buffer pooling
+    implementation "io.netty:netty-all:${nettyVersion}"
 }
 
 application {
@@ -46,6 +50,15 @@ application {
         '-Xmx4G',
         '-Xms512M'
     ]
+}
+
+// Dedicated server entry point — no LWJGL, headless JVM
+tasks.register('runServer', JavaExec) {
+    group       = 'application'
+    description = 'Runs the dedicated game server (headless, no window)'
+    classpath   = sourceSets.main.runtimeClasspath
+    mainClass   = 'com.voxelgame.server.ServerMain'
+    jvmArgs     = ['-Xmx2G', '-Xms256M', '-Djava.awt.headless=true']
 }
 
 jar {

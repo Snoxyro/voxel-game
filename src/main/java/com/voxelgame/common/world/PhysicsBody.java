@@ -1,6 +1,5 @@
 package com.voxelgame.common.world;
 
-import com.voxelgame.game.World;
 import org.joml.Vector3f;
 
 /**
@@ -76,7 +75,7 @@ public class PhysicsBody {
      * @param world     world to query for solid blocks
      * @param deltaTime seconds this tick represents (typically 1/60)
      */
-    public void update(World world, float deltaTime) {
+    public void update(BlockView world, float deltaTime) {
         // Gravity is applied unconditionally. When standing on the ground,
         // the small downward displacement is immediately cancelled by the Y
         // collision resolver each tick — position stays stable.
@@ -131,7 +130,7 @@ public class PhysicsBody {
      * @param axis  0 = X, 1 = Y, 2 = Z
      * @return true if at least one collision was resolved
      */
-    private boolean resolveAxis(World world, int axis) {
+    private boolean resolveAxis(BlockView world, int axis) {
         // Current AABB bounds
         float minX = position.x - HALF_WIDTH;
         float maxX = position.x + HALF_WIDTH;
