@@ -706,6 +706,46 @@ quads need tiling UVs.
 
 ---
 
+## Entry 015 — Frustum Culling and Indexed Rendering (EBO)
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Added frustum culling to `World.render()` — now accepts projectionMatrix and
+  viewMatrix, combines them into a clip-space matrix, and uses JOML's
+  FrustumIntersection to test each chunk's AABB before issuing any draw calls.
+  Chunks fully outside the frustum are skipped entirely.
+- `World.render()` now returns int[2] — [visible chunk count, total mesh count].
+- GameLoop diagnostic line updated to show "Chunks: X/Y" — confirmed working:
+  looking at sky reports 0, full world view reports max.
+- Rewrote `Mesh.java` to use an EBO (Element Buffer Object). ChunkMesher output
+  is unchanged — Mesh internally converts the 6-vertex-per-quad input into 4
+  unique vertices + 6 indices before GPU upload, reducing vertex data by ~33%.
+  Draw call changed from glDrawArrays to glDrawElements with GL_UNSIGNED_INT indices.
+
+### Decisions Made
+- GL_UNSIGNED_INT chosen for index type — supports ~4 billion unique vertices per
+  mesh, far beyond any practical chunk size. Other bottlenecks would be hit first.
+- EBO is unbound correctly: GL_ELEMENT_ARRAY_BUFFER must NOT be unbound while the
+  VAO is active — doing so removes the EBO association from the VAO silently.
+- BlockHighlightRenderer uses GL_LINES with its own VAO and is unaffected by the
+  Mesh EBO change.
+
+### Problems Encountered
+- None. Both changes worked on first run.
+
+### AI Assistance Notes
+- Claude wrote both changes.
+
+### Lessons / Observations
+- Frustum culling impact is immediately observable via the chunk counter — looking
+  straight up drops visible chunks to 0.
+- EBO correctness is not visually verifiable — identical output to before is the
+  confirmation. The critical gotcha: unbinding GL_ELEMENT_ARRAY_BUFFER while a VAO
+  is bound silently breaks the association. This is a well-known OpenGL trap.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

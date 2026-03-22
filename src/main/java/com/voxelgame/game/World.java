@@ -2,6 +2,8 @@ package com.voxelgame.game;
 
 import com.voxelgame.engine.Mesh;
 import com.voxelgame.engine.ShaderProgram;
+
+import org.joml.FrustumIntersection;
 import org.joml.Matrix4f;
 
 import java.util.HashMap;
@@ -107,25 +109,48 @@ public class World {
     }
 
     /**
-     * Renders all loaded chunks using the provided shader.
-     * The shader must be bound before calling this.
-     * Sets the modelMatrix uniform for each chunk to translate it
-     * to its correct world-space position.
+     * Renders all visible chunks using the provided shader.
+     * Chunks whose axis-aligned bounding box lies entirely outside the camera
+     * frustum are skipped before any GPU work is done.
      *
-     * @param shader the currently bound shader program
+     * <p>The frustum is extracted from the combined projection × view matrix.
+     * JOML's FrustumIntersection decomposes that matrix into six clip planes
+     * and tests each chunk AABB against all of them.
+     *
+     * @param shader           the currently bound shader program
+     * @param projectionMatrix the camera's projection matrix
+     * @param viewMatrix       the camera's view matrix
+     * @return int[2] — [visible chunk count, total mesh count]
      */
-    public void render(ShaderProgram shader) {
+    public int[] render(ShaderProgram shader, Matrix4f projectionMatrix, Matrix4f viewMatrix) {
+        // Multiplying projection × view gives the clip-space transform.
+        // FrustumIntersection extracts the six frustum planes from it.
+        FrustumIntersection frustum = new FrustumIntersection(
+            new Matrix4f(projectionMatrix).mul(viewMatrix)
+        );
+
+        int visible = 0;
+
         for (Map.Entry<ChunkPos, Mesh> entry : meshes.entrySet()) {
-            ChunkPos pos = entry.getKey();
-            Mesh mesh    = entry.getValue();
+            ChunkPos pos  = entry.getKey();
+            Mesh     mesh = entry.getValue();
 
-            Matrix4f modelMatrix = new Matrix4f().translation(
-                pos.worldX(), pos.worldY(), pos.worldZ()
-            );
+            // Each chunk occupies a Chunk.SIZE³ world-space box.
+            // If the box is entirely outside any frustum plane, skip it.
+            float minX = pos.worldX();
+            float minY = pos.worldY();
+            float minZ = pos.worldZ();
+            if (!frustum.testAab(minX, minY, minZ,
+                                minX + Chunk.SIZE,
+                                minY + Chunk.SIZE,
+                                minZ + Chunk.SIZE)) continue;
 
-            shader.setUniform("modelMatrix", modelMatrix);
+            shader.setUniform("modelMatrix", new Matrix4f().translation(minX, minY, minZ));
             mesh.render();
+            visible++;
         }
+
+        return new int[]{ visible, meshes.size() };
     }
 
     /**

@@ -73,6 +73,9 @@ public class GameLoop {
     /** Whether the F key was down last tick — used for edge detection. */
     private boolean lastFKeyDown = false;
 
+    /** Chunk render stats from the last frame — [visible, total]. Updated each render(). */
+    private int[] lastRenderStats = { 0, 0 };
+
     /**
      * Constructs the GameLoop and its owned subsystems.
      */
@@ -174,8 +177,9 @@ public class GameLoop {
             frames++;
 
             if (System.currentTimeMillis() - diagnosticTimer >= 1000.0) {
-                System.out.printf("FPS: %d | UPS: %d | Mode: %s | Selected: %s%n",
-                    frames, updates, freecam ? "FREECAM" : "PHYSICS", selectedBlock);
+                System.out.printf("FPS: %d | UPS: %d | Chunks: %d/%d | Mode: %s | Selected: %s%n",
+                    frames, updates, lastRenderStats[0], lastRenderStats[1],
+                    freecam ? "FREECAM" : "PHYSICS", selectedBlock);
                 frames          = 0;
                 updates         = 0;
                 diagnosticTimer = System.currentTimeMillis();
@@ -310,7 +314,7 @@ public class GameLoop {
         shaderProgram.bind();
         shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
         shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
-        world.render(shaderProgram);
+        lastRenderStats = world.render(shaderProgram, camera.getProjectionMatrix(), camera.getViewMatrix());
 
         if (lastRaycast.hit()) {
             blockHighlight.render(shaderProgram,
