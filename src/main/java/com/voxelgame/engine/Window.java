@@ -3,6 +3,7 @@ package com.voxelgame.engine;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
+import org.lwjgl.glfw.GLFWWindowRefreshCallback;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryUtil;
@@ -30,6 +31,9 @@ public class Window {
 
     /** Held so GLFW doesn't GC the callback while the window is alive. */
     private GLFWFramebufferSizeCallback framebufferSizeCallback;
+
+    /** Held to prevent GC while the window is alive — GLFW calls into it during window drag. */
+    private GLFWWindowRefreshCallback refreshCallback;
 
     /**
      * Creates a Window instance. Does not open the window yet — call init() for that.
@@ -122,6 +126,7 @@ public class Window {
      */
     public void cleanup() {
         if (framebufferSizeCallback != null) framebufferSizeCallback.free();
+        if (refreshCallback != null) refreshCallback.free();
         GLFW.glfwDestroyWindow(windowHandle);
         GLFW.glfwTerminate();
     }
@@ -134,4 +139,20 @@ public class Window {
 
     /** @return current framebuffer height in pixels */
     public int getFramebufferHeight() { return framebufferHeight; }
+
+    /**
+     * Registers a callback that fires when the OS requests the window to repaint —
+     * this happens during window drag on Windows, where the OS modal loop would
+     * otherwise block the main game loop entirely.
+     *
+     * <p>The callback reference is stored in a field to prevent garbage collection.
+     * GLFW holds a native pointer to it — if it were collected, the next drag would
+     * crash the JVM with a segfault.
+     *
+     * @param onRefresh called each time the OS requests a repaint (typically during drag)
+     */
+    public void setRefreshCallback(Runnable onRefresh) {
+        refreshCallback = GLFWWindowRefreshCallback.create(handle -> onRefresh.run());
+        GLFW.glfwSetWindowRefreshCallback(windowHandle, refreshCallback);
+    }
 }

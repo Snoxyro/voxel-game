@@ -6,10 +6,13 @@ import java.util.List;
 /**
  * Generates an interleaved vertex array (position + color) from a Chunk.
  *
- * <p>Only visible faces are emitted — a face is skipped if the neighbor in that
- * direction is a solid block. Each face is shaded by a directional brightness
- * multiplier to give cheap depth cues without a lighting system:
- * top = full, sides = dimmed, bottom = darkest.
+ * <p>Only visible faces are emitted. A face is skipped if the neighbor in that
+ * direction is a solid block. Neighbor checks that cross a chunk boundary are
+ * resolved via the {@link World} — this eliminates the seam faces that were
+ * previously generated between adjacent loaded chunks.
+ *
+ * <p>Each face is shaded by a directional brightness multiplier to give cheap
+ * depth cues without a lighting system: top = full, sides = dimmed, bottom = darkest.
  *
  * <p>Output format per vertex: [x, y, z, r, g, b] — 6 floats, 6 vertices per face.
  */
@@ -25,9 +28,12 @@ public class ChunkMesher {
      * Generates the visible mesh for the given chunk.
      *
      * @param chunk the chunk to mesh
+     * @param pos   the chunk's position in the world grid — used to resolve
+     *              cross-boundary neighbor lookups into world-space coordinates
+     * @param world the world — queried when a neighbor check crosses a chunk boundary
      * @return interleaved float array [x, y, z, r, g, b, ...] — 6 floats per vertex
      */
-    public static float[] mesh(Chunk chunk) {
+    public static float[] mesh(Chunk chunk, ChunkPos pos, World world) {
         List<Float> vertices = new ArrayList<>();
 
         for (int x = 0; x < Chunk.SIZE; x++) {
@@ -37,8 +43,12 @@ public class ChunkMesher {
 
                     float[] color = chunk.getBlock(x, y, z).color();
 
+                    // For each of the six faces, check whether the neighbor in
+                    // that direction is air. isAirAt() handles the cross-boundary
+                    // case transparently — callers here don't need to know.
+
                     // TOP face (+Y) — visible if block above is air
-                    if (chunk.isAir(x, y + 1, z)) {
+                    if (isAirAt(chunk, pos, world, x, y + 1, z)) {
                         emitQuad(vertices, color, SHADE_TOP,
                             x,     y + 1, z,
                             x,     y + 1, z + 1,
@@ -47,7 +57,7 @@ public class ChunkMesher {
                         );
                     }
                     // BOTTOM face (-Y)
-                    if (chunk.isAir(x, y - 1, z)) {
+                    if (isAirAt(chunk, pos, world, x, y - 1, z)) {
                         emitQuad(vertices, color, SHADE_BOTTOM,
                             x,     y, z + 1,
                             x,     y, z,
@@ -56,7 +66,7 @@ public class ChunkMesher {
                         );
                     }
                     // NORTH face (-Z)
-                    if (chunk.isAir(x, y, z - 1)) {
+                    if (isAirAt(chunk, pos, world, x, y, z - 1)) {
                         emitQuad(vertices, color, SHADE_SIDE,
                             x,     y,     z,
                             x,     y + 1, z,
@@ -65,7 +75,7 @@ public class ChunkMesher {
                         );
                     }
                     // SOUTH face (+Z)
-                    if (chunk.isAir(x, y, z + 1)) {
+                    if (isAirAt(chunk, pos, world, x, y, z + 1)) {
                         emitQuad(vertices, color, SHADE_SIDE,
                             x + 1, y,     z + 1,
                             x + 1, y + 1, z + 1,
@@ -74,7 +84,7 @@ public class ChunkMesher {
                         );
                     }
                     // EAST face (+X)
-                    if (chunk.isAir(x + 1, y, z)) {
+                    if (isAirAt(chunk, pos, world, x + 1, y, z)) {
                         emitQuad(vertices, color, SHADE_SIDE,
                             x + 1, y,     z,
                             x + 1, y + 1, z,
@@ -83,7 +93,7 @@ public class ChunkMesher {
                         );
                     }
                     // WEST face (-X)
-                    if (chunk.isAir(x - 1, y, z)) {
+                    if (isAirAt(chunk, pos, world, x - 1, y, z)) {
                         emitQuad(vertices, color, SHADE_SIDE,
                             x, y,     z + 1,
                             x, y + 1, z + 1,
@@ -101,6 +111,40 @@ public class ChunkMesher {
             result[i] = vertices.get(i);
         }
         return result;
+    }
+
+    /**
+     * Checks whether the block at the given local chunk coordinates is air,
+     * crossing into the World if the coordinates fall outside this chunk's bounds.
+     *
+     * <p>When the neighbor is within the chunk, this is a direct array lookup —
+     * fast, no HashMap overhead. When the neighbor is in an adjacent chunk, the
+     * world is queried. {@link World#getBlock} returns {@link Block#AIR} for
+     * unloaded chunks, so faces at the edge of the loaded world are always emitted
+     * (the world boundary is treated as open air, which is the correct visual result).
+     *
+     * @param chunk  the chunk being meshed
+     * @param pos    the chunk's world grid position
+     * @param world  the world, for cross-boundary lookups
+     * @param lx     local X coordinate (may be -1 or Chunk.SIZE to cross a boundary)
+     * @param ly     local Y coordinate
+     * @param lz     local Z coordinate
+     * @return true if the neighbor position is air or unloaded
+     */
+    private static boolean isAirAt(Chunk chunk, ChunkPos pos, World world,
+                                    int lx, int ly, int lz) {
+        if (lx >= 0 && lx < Chunk.SIZE
+         && ly >= 0 && ly < Chunk.SIZE
+         && lz >= 0 && lz < Chunk.SIZE) {
+            // Neighbor is inside this chunk — fast path, no world lookup needed
+            return chunk.isAir(lx, ly, lz);
+        }
+        // Neighbor is in an adjacent chunk — convert to world space and query
+        return world.getBlock(
+            pos.worldX() + lx,
+            pos.worldY() + ly,
+            pos.worldZ() + lz
+        ) == Block.AIR;
     }
 
     /**

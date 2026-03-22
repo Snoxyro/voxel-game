@@ -127,6 +127,13 @@ public class GameLoop {
         blockHighlight = new BlockHighlightRenderer();
         hudRenderer    = new HudRenderer();
 
+        // Keep the screen alive during window drag — the OS modal loop blocks our
+        // main loop on Windows, so we hook the OS repaint request and render there.
+        window.setRefreshCallback(() -> {
+            render();
+            window.swapBuffers();
+        });
+
         System.out.println("Engine initialized.");
         System.out.println("Controls: WASD move | mouse look");
         System.out.println("  Space       — jump (physics) / fly up (freecam)");

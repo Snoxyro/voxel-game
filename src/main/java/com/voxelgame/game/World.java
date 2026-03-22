@@ -21,7 +21,13 @@ public class World {
     private final Map<ChunkPos, Mesh> meshes = new HashMap<>();
 
     /**
-     * Adds a chunk at the given grid position and immediately generates its mesh.
+     * Adds a chunk at the given grid position, generates its mesh, then
+     * triggers mesh rebuilds on all six face-adjacent neighbors that already exist.
+     *
+     * <p>Neighbor rebuilds are necessary because adjacent chunks may have emitted
+     * boundary faces toward this position when it was absent (world.getBlock
+     * returned AIR for unloaded chunks). Now that this chunk exists, those faces
+     * may be incorrectly visible — a rebuild corrects them.
      *
      * @param pos   the chunk's grid coordinate
      * @param chunk the chunk data to register
@@ -29,6 +35,7 @@ public class World {
     public void addChunk(ChunkPos pos, Chunk chunk) {
         chunks.put(pos, chunk);
         rebuildMesh(pos);
+        rebuildNeighbors(pos);
     }
 
     /**
@@ -58,13 +65,16 @@ public class World {
     }
 
     /**
-     * Sets the block at the given world-space coordinates and immediately
-     * rebuilds the mesh for the affected chunk.
-     * Does nothing if the coordinates fall outside any loaded chunk.
+     * Sets the block at the given world-space coordinates, rebuilds the mesh for
+     * the affected chunk, and rebuilds any face-adjacent neighbor chunks whose
+     * boundary faces may now be stale.
      *
-     * <p>Note: faces on chunk boundaries are not yet neighbour-aware — a block
-     * placed or removed on a chunk edge may leave visible seam artefacts on the
-     * adjacent chunk until Phase 4 adds neighbour-aware meshing.
+     * <p>A neighbor rebuild is triggered when the modified block sits on the edge
+     * of its chunk (local coordinate 0 or {@link Chunk#SIZE} - 1) — the adjacent
+     * chunk may have been emitting or suppressing a boundary face based on the old
+     * block state.
+     *
+     * <p>Does nothing if the coordinates fall outside any loaded chunk.
      *
      * @param worldX world-space X coordinate
      * @param worldY world-space Y coordinate
@@ -78,13 +88,22 @@ public class World {
         ChunkPos pos = new ChunkPos(cx, cy, cz);
         Chunk chunk = chunks.get(pos);
         if (chunk == null) return;
-        chunk.setBlock(
-            Math.floorMod(worldX, Chunk.SIZE),
-            Math.floorMod(worldY, Chunk.SIZE),
-            Math.floorMod(worldZ, Chunk.SIZE),
-            block
-        );
+
+        int lx = Math.floorMod(worldX, Chunk.SIZE);
+        int ly = Math.floorMod(worldY, Chunk.SIZE);
+        int lz = Math.floorMod(worldZ, Chunk.SIZE);
+
+        chunk.setBlock(lx, ly, lz, block);
         rebuildMesh(pos);
+
+        // If the modified block is on a chunk boundary, the face the neighbor
+        // emitted (or suppressed) toward this position is now stale.
+        if (lx == 0)              rebuildMesh(new ChunkPos(cx - 1, cy, cz));
+        if (lx == Chunk.SIZE - 1) rebuildMesh(new ChunkPos(cx + 1, cy, cz));
+        if (ly == 0)              rebuildMesh(new ChunkPos(cx, cy - 1, cz));
+        if (ly == Chunk.SIZE - 1) rebuildMesh(new ChunkPos(cx, cy + 1, cz));
+        if (lz == 0)              rebuildMesh(new ChunkPos(cx, cy, cz - 1));
+        if (lz == Chunk.SIZE - 1) rebuildMesh(new ChunkPos(cx, cy, cz + 1));
     }
 
     /**
@@ -100,7 +119,6 @@ public class World {
             ChunkPos pos = entry.getKey();
             Mesh mesh    = entry.getValue();
 
-            // Build a translation matrix for this chunk's world-space origin
             Matrix4f modelMatrix = new Matrix4f().translation(
                 pos.worldX(), pos.worldY(), pos.worldZ()
             );
@@ -122,8 +140,25 @@ public class World {
     }
 
     /**
+     * Triggers a mesh rebuild for all six face-adjacent neighbors of the given
+     * chunk position. {@link #rebuildMesh} is a no-op for positions that have
+     * no chunk data, so non-existent neighbors are skipped automatically.
+     *
+     * @param pos the chunk whose neighbors should be rebuilt
+     */
+    private void rebuildNeighbors(ChunkPos pos) {
+        rebuildMesh(new ChunkPos(pos.x() - 1, pos.y(), pos.z()));
+        rebuildMesh(new ChunkPos(pos.x() + 1, pos.y(), pos.z()));
+        rebuildMesh(new ChunkPos(pos.x(), pos.y() - 1, pos.z()));
+        rebuildMesh(new ChunkPos(pos.x(), pos.y() + 1, pos.z()));
+        rebuildMesh(new ChunkPos(pos.x(), pos.y(), pos.z() - 1));
+        rebuildMesh(new ChunkPos(pos.x(), pos.y(), pos.z() + 1));
+    }
+
+    /**
      * Regenerates the GPU mesh for the chunk at the given position.
      * If a mesh already exists for this position it is deleted first.
+     * No-op if no chunk data exists at this position.
      *
      * @param pos the grid position of the chunk to rebuild
      */
@@ -131,11 +166,10 @@ public class World {
         Chunk chunk = chunks.get(pos);
         if (chunk == null) return;
 
-        // Delete old mesh if one exists
         Mesh old = meshes.remove(pos);
         if (old != null) old.cleanup();
 
-        float[] vertices = ChunkMesher.mesh(chunk);
+        float[] vertices = ChunkMesher.mesh(chunk, pos, this);
 
         // Don't upload an empty mesh — chunk may be all air
         if (vertices.length > 0) {

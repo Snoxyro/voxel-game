@@ -546,6 +546,166 @@ boundaries, and the window drag freeze.
 
 ---
 
+## Entry 013 — Neighbor-Aware Meshing and Window Drag Fix
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+ 
+### What Was Done
+- Fixed `ChunkMesher` to be neighbor-aware — faces on chunk boundaries are no
+  longer blindly emitted. A new `isAirAt()` helper checks within the chunk bounds
+  for the fast path, and falls through to `world.getBlock()` for cross-boundary
+  lookups. `ChunkMesher.mesh()` signature updated to accept `ChunkPos` and `World`.
+- Updated `World.rebuildMesh()` to pass `pos` and `this` to the mesher — one line
+  change.
+- Fixed window drag freeze on Windows — registered a `GLFWWindowRefreshCallback`
+  in `Window.java` that fires during the OS modal drag loop. `GameLoop` provides
+  a render+swapBuffers runnable via `window.setRefreshCallback()`. The callback
+  reference is stored as a field to prevent GC (same hazard as the framebuffer
+  size callback from Entry 010).
+ 
+### Decisions Made
+- `isAirAt()` uses the chunk directly when the neighbor is in-bounds (fast array
+  lookup, no HashMap) and falls back to `world.getBlock()` only at boundaries.
+  The world returns `Block.AIR` for unloaded chunks, so faces at the loaded world
+  edge are always emitted — the boundary is treated as open air, which is the
+  correct visual result.
+- The refresh callback calls `render()` only (not `update()`) — physics and game
+  logic should not advance during a window drag. The screen stays alive visually
+  but the game state is frozen, which is acceptable behavior.
+- `GLFWWindowRefreshCallback` stored as a field on `Window` — consistent with the
+  pattern established for `GLFWFramebufferSizeCallback` in Entry 010.
+ 
+### Problems Encountered
+- **Partial face culling (discovered after testing):** The mesher logic was correct
+  but chunk meshes were built eagerly at addChunk time before neighboring chunks
+  existed. The fix is recorded in Entry 014.
+ 
+### AI Assistance Notes
+- Claude wrote both fixes with concept explanations.
+ 
+### Lessons / Observations
+- Neighbor-aware meshing removes a correctness bug that was invisible from above
+  but would have been visible when looking at chunk seams from below or at an angle.
+- The `GLFWWindowRefreshCallback` pattern is the same Java/native GC hazard as
+  the framebuffer callback — worth noting as a general rule: any LWJGL callback
+  registered with GLFW must be kept alive in a field.
+- Block break/place at chunk boundaries still does not rebuild the adjacent chunk's
+  mesh — that requires a more involved fix (detect boundary touches in setBlock and
+  queue neighbor rebuilds). Deferred — see Phase 4 Roadmap below.
+ 
+---
+ 
+## Phase 4 Roadmap — Future TODOs
+*This section exists to preserve planning context between chat sessions.
+A future Claude instance reading this should treat these as the agreed plan.*
+ 
+### Remaining Phase 4 work (in priority order)
+ 
+**1. Frustum culling** *(next up)*
+Chunks outside the camera's view frustum are still submitted for rendering every
+frame. JOML's `FrustumIntersection` class can test a chunk's axis-aligned bounding
+box against the frustum. If the AABB is outside, skip the draw call entirely.
+This is cheap to compute and essential once chunk streaming is in place.
+Implementation: compute frustum from projectionMatrix * viewMatrix each frame in
+`World.render()`, test each chunk's AABB before calling `mesh.render()`.
+ 
+**2. Indexed rendering (EBO — Element Buffer Object)**
+Currently each quad emits 6 vertices (two triangles), with 4 of them being
+duplicates of the quad's 4 corners. An EBO lets you define 4 unique vertices and
+index into them, reducing vertex data by ~33%. Requires updating `Mesh.java` to
+accept both a vertex array and an index array, and uploading a GL_ELEMENT_ARRAY_BUFFER.
+Draw call changes from `glDrawArrays` to `glDrawElements`. Do this before greedy
+meshing since greedy meshing will produce quads anyway.
+ 
+**3. Greedy meshing**
+The signature voxel optimization. Instead of one quad per visible face, scan each
+layer (per axis) and merge adjacent faces of the same block type and shade into a
+single large quad. A flat grass surface of 16×16 blocks collapses from 256 quads
+to 1 quad. The algorithm is a 2D rectangle merge per layer.
+IMPORTANT: greedy meshing interacts with textures. If textures are added after
+greedy meshing, UV tiling across merged quads must be handled (either via UV
+scaling or texture arrays with per-face UVs). Design decision needed when textures
+are approached — the mesher may need a second pass at that point.
+Deferred neighbor chunk rebuild (block break/place at boundaries) should also be
+done at this step, since greedy meshing makes boundary handling slightly more complex.
+ 
+**4. Chunk streaming + background generation**
+Replace the fixed 8×5×8 grid with dynamic load/unload based on player position.
+Chunks within a configurable radius are loaded; chunks beyond it are unloaded and
+their GPU resources freed. Terrain generation (CPU-heavy) runs on worker threads.
+CRITICAL threading rule from CLAUDE.md: mesh generation (ChunkMesher.mesh()) can
+run on a worker thread; new Mesh(vertices) (GPU upload) must happen on the main
+thread. A concurrent queue or similar handoff point is needed between the two.
+This is the most architecturally significant Phase 4 change.
+ 
+**5. Ambient occlusion**
+Bake per-vertex corner darkening into the mesh at build time — no runtime cost,
+no separate light system. At each vertex, count how many of the surrounding corner
+blocks are solid, and darken proportionally. Gives depth and contact shadow that
+directional shading alone doesn't produce. Visual impact is large for very low
+implementation cost. Does not require a light propagation system.
+ 
+**6. Textures** *(deferred until after greedy meshing is stable)*
+Adding textures requires: UV attribute in Mesh (layout location 2), texture atlas
+image loaded via STB (already in LWJGL dependencies), sampler2D uniform in shader,
+UV lookup table in ChunkMesher per block type per face. The texture atlas approach
+(all block textures packed into one image, sampled by UV coordinates) avoids texture
+binding overhead. Greedy meshing must be revisited when textures are added — merged
+quads need tiling UVs.
+ 
+### Deferred to Phase 5+
+- Full Minecraft-style light propagation (block lights + skylight + dynamic updates)
+  — large system, significant chunk update complexity. Ambient occlusion covers
+  most of the visual benefit for now.
+- LOD / VOXY-style distant rendering — different mesh representations at different
+  distances. Phase 6+ territory.
+- Caves and underground generation — TerrainGenerator currently only does height
+  maps. 3D noise density functions needed for cave carving.
+ 
+---
+
+## Entry 014 — Neighbor Rebuild Sequencing Fix
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Fixed asymmetric chunk face culling from Entry 013. Root cause: chunks are added
+  in ascending cx/cz/cy order. When chunk (cx,cy,cz) is meshed, its +x/+z/+y
+  neighbors don't exist yet — world.getBlock() returns AIR, so boundary faces are
+  emitted that should be hidden. The -x/-z/-y neighbors already exist so those
+  faces ARE culled, matching the observed asymmetry exactly.
+- Added rebuildNeighbors(ChunkPos) to World.java — called from addChunk after the
+  new chunk's own mesh is built. Iterates all six face-adjacent positions and calls
+  rebuildMesh for each. rebuildMesh is already a no-op for non-existent chunks.
+- Also fixed the setBlock boundary bug from Entry 009: when a block is modified at
+  local coordinate 0 or Chunk.SIZE-1, the face-adjacent neighbor's mesh is now
+  also rebuilt.
+
+### Decisions Made
+- rebuildNeighbors is also the correct pattern for chunk streaming — when a chunk
+  streams in, its neighbors' previously-exposed boundary faces must be re-evaluated.
+  The same addChunk call handles both cases.
+- A render thread was considered for the screen freeze issue but rejected — OpenGL
+  is tied to the thread that created the context, and splitting GL context from GLFW
+  event management conflicts with CLAUDE.md architecture rules and adds significant
+  complexity for a cosmetic issue. The GLFWWindowRefreshCallback remains the fix.
+
+### Problems Encountered
+- None. Both fixes worked on first run.
+
+### AI Assistance Notes
+- Claude identified the root cause from a visual description of the asymmetry
+  (x+/z+ unculled, x-/z- culled) and the known chunk load order.
+
+### Lessons / Observations
+- Eager meshing during chunk registration only works correctly when all neighbors
+  already exist. In a streaming world, meshes must always be rebuilt after a
+  neighbor is added or removed — not just the newly loaded chunk.
+- The asymmetry was a direct consequence of loop order, not a logic error in the
+  mesher itself.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 
