@@ -24,7 +24,7 @@ public class GameLoop {
      */
     private static final float DELTA_TIME        = 1.0f / TARGET_UPS;
 
-    private static final float FREECAM_SPEED     = 0.15f;
+    private static final float FREECAM_SPEED     = 0.50f;
     private static final float MOUSE_SENSITIVITY = 0.1f;
 
     /** Maximum block interaction range in blocks. */

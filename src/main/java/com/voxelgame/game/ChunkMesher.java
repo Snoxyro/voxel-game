@@ -51,26 +51,32 @@ public class ChunkMesher {
     /**
      * Generates the greedy-merged visible mesh for the given chunk.
      *
+     * <p>Fast-path: all-air chunks return an empty array immediately with no
+     * iteration. For occupied chunks, the Y occupancy range from the chunk is
+     * passed to each face pass so layer loops are clamped to the occupied band.
+     *
      * @param chunk     the chunk to mesh
      * @param pos       the chunk's position in the world grid
-     * @param neighbors snapshot of the six face-adjacent neighbor chunks —
-     *                  missing neighbors are treated as air (boundary faces emitted)
-     * @return interleaved float array [x, y, z, r, g, b, ...] — 6 floats per vertex,
-     *         trimmed to exact size
+     * @param neighbors snapshot of the six face-adjacent neighbor chunks
+     * @return interleaved float array [x, y, z, r, g, b, ...], trimmed to exact size
      */
     public static float[] mesh(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors) {
-        // Manually grown float buffer — avoids Float boxing overhead of List<Float>
-        float[] buf = new float[INITIAL_CAPACITY];
-        int size = 0;
+        // All-air chunks produce no geometry — skip all six face passes entirely
+        if (chunk.isAllAir()) return new float[0];
 
+        int minY = chunk.getMinOccupiedY();
+        int maxY = chunk.getMaxOccupiedY();
+
+        float[] buf  = new float[INITIAL_CAPACITY];
+        int     size = 0;
         int[][] mask = new int[Chunk.SIZE][Chunk.SIZE];
 
-        size = meshTopFaces   (chunk, pos, neighbors, buf, size, mask);
-        size = meshBottomFaces(chunk, pos, neighbors, buf, size, mask);
-        size = meshNorthFaces (chunk, pos, neighbors, buf, size, mask);
-        size = meshSouthFaces (chunk, pos, neighbors, buf, size, mask);
-        size = meshEastFaces  (chunk, pos, neighbors, buf, size, mask);
-        size = meshWestFaces  (chunk, pos, neighbors, buf, size, mask);
+        size = meshTopFaces   (chunk, pos, neighbors, buf, size, mask, minY, maxY);
+        size = meshBottomFaces(chunk, pos, neighbors, buf, size, mask, minY, maxY);
+        size = meshNorthFaces (chunk, pos, neighbors, buf, size, mask, minY, maxY);
+        size = meshSouthFaces (chunk, pos, neighbors, buf, size, mask, minY, maxY);
+        size = meshEastFaces  (chunk, pos, neighbors, buf, size, mask, minY, maxY);
+        size = meshWestFaces  (chunk, pos, neighbors, buf, size, mask, minY, maxY);
 
         return Arrays.copyOf(buf, size);
     }
@@ -79,10 +85,13 @@ public class ChunkMesher {
     // Per-direction mesh passes
     // -------------------------------------------------------------------------
 
-    /** TOP faces (+Y): scan x/z plane per y layer. Face sits at y+1. mask axes: i=x, j=z. */
+    /**
+     * TOP faces (+Y): outer loop clamped to [minY, maxY] — layers above and below
+     * the occupied band are guaranteed empty and skipped entirely.
+     */
     private static int meshTopFaces(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
-                                     float[] buf, int size, int[][] mask) {
-        for (int y = 0; y < Chunk.SIZE; y++) {
+                                     float[] buf, int size, int[][] mask, int minY, int maxY) {
+        for (int y = minY; y <= maxY; y++) {
             for (int z = 0; z < Chunk.SIZE; z++)
                 for (int x = 0; x < Chunk.SIZE; x++) {
                     Block b = chunk.getBlock(x, y, z);
@@ -104,10 +113,12 @@ public class ChunkMesher {
         return size;
     }
 
-    /** BOTTOM faces (-Y): scan x/z plane per y layer. Face sits at y. mask axes: i=x, j=z. */
+    /**
+     * BOTTOM faces (-Y): outer loop clamped to [minY, maxY].
+     */
     private static int meshBottomFaces(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
-                                        float[] buf, int size, int[][] mask) {
-        for (int y = 0; y < Chunk.SIZE; y++) {
+                                        float[] buf, int size, int[][] mask, int minY, int maxY) {
+        for (int y = minY; y <= maxY; y++) {
             for (int z = 0; z < Chunk.SIZE; z++)
                 for (int x = 0; x < Chunk.SIZE; x++) {
                     Block b = chunk.getBlock(x, y, z);
@@ -129,16 +140,21 @@ public class ChunkMesher {
         return size;
     }
 
-    /** NORTH faces (-Z): scan x/y plane per z layer. Face sits at z. mask axes: i=x, j=y. */
+    /** NORTH faces (-Z): stale mask rows outside [minY, maxY] are explicitly zeroed. */
     private static int meshNorthFaces(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
-                                       float[] buf, int size, int[][] mask) {
+                                       float[] buf, int size, int[][] mask, int minY, int maxY) {
         for (int z = 0; z < Chunk.SIZE; z++) {
-            for (int y = 0; y < Chunk.SIZE; y++)
+            for (int y = 0; y < Chunk.SIZE; y++) {
+                if (y < minY || y > maxY) {
+                    Arrays.fill(mask[y], 0);
+                    continue;
+                }
                 for (int x = 0; x < Chunk.SIZE; x++) {
                     Block b = chunk.getBlock(x, y, z);
                     mask[y][x] = (b != Block.AIR && isAirAt(chunk, pos, neighbors, x, y, z - 1))
                             ? b.ordinal() + 1 : 0;
                 }
+            }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 5) {
                 int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
@@ -154,16 +170,21 @@ public class ChunkMesher {
         return size;
     }
 
-    /** SOUTH faces (+Z): scan x/y plane per z layer. Face sits at z+1. mask axes: i=x, j=y. */
+    /** SOUTH faces (+Z): stale mask rows outside [minY, maxY] are explicitly zeroed. */
     private static int meshSouthFaces(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
-                                       float[] buf, int size, int[][] mask) {
+                                       float[] buf, int size, int[][] mask, int minY, int maxY) {
         for (int z = 0; z < Chunk.SIZE; z++) {
-            for (int y = 0; y < Chunk.SIZE; y++)
+            for (int y = 0; y < Chunk.SIZE; y++) {
+                if (y < minY || y > maxY) {
+                    Arrays.fill(mask[y], 0);
+                    continue;
+                }
                 for (int x = 0; x < Chunk.SIZE; x++) {
                     Block b = chunk.getBlock(x, y, z);
                     mask[y][x] = (b != Block.AIR && isAirAt(chunk, pos, neighbors, x, y, z + 1))
                             ? b.ordinal() + 1 : 0;
                 }
+            }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 5) {
                 int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
@@ -179,16 +200,21 @@ public class ChunkMesher {
         return size;
     }
 
-    /** EAST faces (+X): scan z/y plane per x layer. Face sits at x+1. mask axes: i=z, j=y. */
+    /** EAST faces (+X): stale mask rows outside [minY, maxY] are explicitly zeroed. */
     private static int meshEastFaces(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
-                                      float[] buf, int size, int[][] mask) {
+                                      float[] buf, int size, int[][] mask, int minY, int maxY) {
         for (int x = 0; x < Chunk.SIZE; x++) {
-            for (int y = 0; y < Chunk.SIZE; y++)
+            for (int y = 0; y < Chunk.SIZE; y++) {
+                if (y < minY || y > maxY) {
+                    Arrays.fill(mask[y], 0);
+                    continue;
+                }
                 for (int z = 0; z < Chunk.SIZE; z++) {
                     Block b = chunk.getBlock(x, y, z);
                     mask[y][z] = (b != Block.AIR && isAirAt(chunk, pos, neighbors, x + 1, y, z))
                             ? b.ordinal() + 1 : 0;
                 }
+            }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 5) {
                 int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];
@@ -204,16 +230,21 @@ public class ChunkMesher {
         return size;
     }
 
-    /** WEST faces (-X): scan z/y plane per x layer. Face sits at x. mask axes: i=z, j=y. */
+    /** WEST faces (-X): stale mask rows outside [minY, maxY] are explicitly zeroed. */
     private static int meshWestFaces(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
-                                      float[] buf, int size, int[][] mask) {
+                                      float[] buf, int size, int[][] mask, int minY, int maxY) {
         for (int x = 0; x < Chunk.SIZE; x++) {
-            for (int y = 0; y < Chunk.SIZE; y++)
+            for (int y = 0; y < Chunk.SIZE; y++) {
+                if (y < minY || y > maxY) {
+                    Arrays.fill(mask[y], 0);
+                    continue;
+                }
                 for (int z = 0; z < Chunk.SIZE; z++) {
                     Block b = chunk.getBlock(x, y, z);
                     mask[y][z] = (b != Block.AIR && isAirAt(chunk, pos, neighbors, x - 1, y, z))
                             ? b.ordinal() + 1 : 0;
                 }
+            }
             int[] quads = buildMergedQuads(mask);
             for (int qi = 0; qi < quads.length; qi += 5) {
                 int i = quads[qi], j = quads[qi+1], w = quads[qi+2], h = quads[qi+3];

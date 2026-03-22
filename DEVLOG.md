@@ -1045,6 +1045,209 @@ require either reducing render distance or optimizing the noise function itself
 
 ---
 
+## Entry 022 — Flat Byte Array Block Storage
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Replaced `Block[][][]` in `Chunk.java` with a flat `byte[]` storing block ordinals.
+  Public API (`getBlock`, `setBlock`, `isAir`) is unchanged — purely internal.
+- Index formula: `x * SIZE * SIZE + y * SIZE + z` (Y innermost stride, aligns with
+  how TerrainGenerator fills columns and how ChunkMesher iterates).
+- `isAir()` now compares a byte to 0 directly — skips the `BLOCK_VALUES` lookup
+  entirely in the mesher's hot path.
+- Added `BLOCK_VALUES` static cache to avoid repeated synthetic `Block.values()` calls.
+- RAM usage dropped from ~2200MB to ~1500MB — 4× smaller per-chunk storage,
+  no scattered enum reference objects.
+
+### Decisions Made
+- `& 0xFF` mask in `getBlock` makes ordinal lookup future-proof against >127 block types.
+- No changes required outside `Chunk.java` — all callers use the same public API.
+
+### Lessons / Observations
+- `Block[][][]` required 3 pointer dereferences per block access and scattered 4096
+  heap objects per chunk. A flat `byte[]` is one contiguous 4KB allocation — the
+  entire chunk fits in CPU L1/L2 cache during a mesh build.
+
+---
+
+## Entry 023 — Heightmap Column Cache
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Added a `ConcurrentHashMap<Long, int[]>` heightmap cache to `TerrainGenerator`.
+  All Y chunks in the same column share one 256-value heightmap computed once.
+- Without the cache, every Y chunk independently evaluated all 256 fBm columns —
+  up to 12× redundant noise work per column at full render distance.
+- Key is a packed long `(cx << 32 | cz & 0xFFFFFFFFL)` — avoids key object allocation
+  per lookup.
+- `computeIfAbsent` is atomic — thread-safe for concurrent workers on the same column
+  with no explicit locks.
+- Added `evictColumn(cx, cz)` called from `World.unloadDistantChunks` when the last
+  Y chunk in a column is removed — prevents unbounded cache growth as the player moves.
+
+### Decisions Made
+- `evictHeightmapIfColumnUnloaded` on `World` checks if any sibling Y chunk is still
+  loaded before evicting. Only the final unload triggers eviction.
+
+### Lessons / Observations
+- Noise evaluation is the most expensive part of generation. Eliminating redundant
+  evaluations across Y slices of the same column is more impactful than any micro-
+  optimization inside the noise function itself.
+
+---
+
+## Entry 024 — Chunk Occupancy Tracking and Mesher Y Clamping
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Added `solidCount`, `minOccupiedY`, `maxOccupiedY` to `Chunk`. Updated `setBlock`
+  to maintain these on every block change at zero extra cost.
+- Added `isAllAir()` — the mesher fast-paths entirely empty chunks (all-air) and
+  returns an empty array without entering any of the six face passes.
+- All six face passes in `ChunkMesher` now clamp their Y layer loops to
+  `[minOccupiedY, maxOccupiedY]`, skipping guaranteed-empty layers above and below
+  actual content. For chunks at the top of the surface band this can skip 10+ layers
+  per direction pass.
+- Pre-computed per-octave arrays (`octaveSeeds`, `octaveAmplitudes`, `octaveFrequencies`,
+  `maxAmplitude`) in `TerrainGenerator` constructor. `fbm()` reads arrays instead of
+  recalculating seeds and scalar parameters on every call.
+
+### Decisions Made
+- `minOccupiedY` / `maxOccupiedY` only expand on block placement, never shrink on
+  removal. Shrinking would require a full O(N) scan. The mesher scans a few extra
+  empty layers at worst after a block is broken at a boundary — always correct,
+  never wrong.
+- Sentinels when empty: `minOccupiedY = SIZE`, `maxOccupiedY = -1`. Only read when
+  `isAllAir()` is false.
+
+### Bugs Fixed
+- **Mask contamination bug:** The four side face passes (North/South/East/West) reuse
+  the mask array across layers. After Y clamping was introduced, rows outside
+  `[minY, maxY]` were never written, leaving stale values from previous layers.
+  `buildMergedQuads` read those stale values and emitted phantom quads. Fixed by
+  explicitly `Arrays.fill(mask[y], 0)` for rows outside the occupied band before
+  calling `buildMergedQuads`.
+
+### Lessons / Observations
+- Reusing an array across loop iterations is a performance pattern but requires every
+  cell to be written on every iteration. Partial writes combined with partial reads
+  from a previous iteration produce silent data corruption that only manifests visually
+  as phantom geometry — hard to attribute to the right cause without careful reading.
+
+---
+
+## Entry 025 — Schedule Guard and Upload Cap Increase
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Added `lastScheduledCX/Y/Z` fields to `World`. `scheduleNeededChunks` is now
+  skipped entirely when the viewer's center chunk hasn't changed since the last call.
+  Avoids scanning ~14,000 positions per tick (33×13×33 region, two HashMap lookups
+  each) when standing still or moving within the same chunk.
+- Schedule re-runs immediately when the center chunk changes, so new columns are
+  picked up without delay.
+
+### Decisions Made
+- Guard is on center chunk position, not world position — world position changes
+  every tick even when standing still. Chunk position only changes when crossing a
+  16-block boundary, which is the only time the schedule scan produces new results.
+
+---
+
+## Entry 026 — Async Remesh Pipeline Bug Fix
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Fixed two related bugs in the async meshing pipeline that caused permanent phantom
+  faces at chunk boundaries, most visible when underground or at chunk load edges.
+
+**Bug 1 — New chunks never remeshed themselves after loading:**
+When a chunk was submitted for generation, a neighbor snapshot was captured at
+submission time. By the time it drained from `pendingChunks`, more neighbors may
+have loaded. The chunk's initial mesh had faces toward now-solid neighbors.
+`markNeighborsDirty` correctly triggered neighbor remeshes but never added the
+chunk itself to `dirtyMeshes`. Those phantom faces persisted permanently.
+Fix: `drainPendingChunks` now adds the newly loaded chunk's own position to
+`dirtyMeshes` after upload, triggering a self-remesh with the current neighbor state.
+
+**Bug 2 — Dirty marks lost while a remesh was in-flight:**
+In `processDirtyMeshes`, `it.remove()` ran unconditionally before the
+`remeshInProgress` check. If a chunk was already being remeshed when a new neighbor
+loaded and re-dirtied it, that dirty mark was consumed and discarded. The in-flight
+remesh completed with a stale snapshot. Nobody ever triggered another remesh.
+Fix: Restructured `processDirtyMeshes` so in-flight positions are skipped (not
+removed) from `dirtyMeshes`. They are picked up and resubmitted on the next tick
+once the in-flight result has drained and cleared `remeshInProgress`.
+
+### Lessons / Observations
+- The directional pattern of the bug (only faces behind the moving player persisted)
+  was the diagnostic clue — those were chunks whose neighbors all finished loading
+  after they had already been meshed with a stale snapshot.
+- Screenshots are unreliable for diagnosing logic bugs in voxel rendering. Manual
+  behavioural descriptions of what is and is not visible from where, and in what
+  direction, are far more diagnostic than visual captures.
+- When debugging async pipelines, trace the full lifecycle of one data item (a single
+  chunk position) through every queue and set it touches. The bug lives wherever the
+  item falls out of the pipeline prematurely.
+
+---
+
+## Phase 4 Roadmap — Remaining Work
+
+### Completed
+- Neighbor-aware chunk meshing (correctness fix)
+- Window drag freeze fix
+- Neighbor rebuild sequencing fix
+- Frustum culling with chunk counter
+- Indexed rendering (EBO)
+- Greedy meshing
+- Chunk streaming with background generation
+- Meshing moved to worker thread (neighbor snapshot)
+- Async neighbor remesh path
+- Thread pool (availableProcessors - 1 workers)
+- Terrain early exits for air/stone chunks
+- float[] buffer in ChunkMesher (no boxing)
+- Flat byte[] block storage in Chunk (~700MB RAM reduction)
+- Heightmap column cache (up to 12× noise reduction per column)
+- isAllAir() fast-path + Y occupancy range clamping in mesher
+- Mask contamination fix (phantom faces from Y clamping)
+- Pre-computed fBm octave arrays
+- Schedule guard (skip 14k position scan when center chunk unchanged)
+- Async remesh pipeline fix (self-remesh + dirty mark loss)
+
+### Remaining (in priority order)
+
+**1. Generation speed — direction bias + submission cap** *(next up)*
+Chunks ahead of the player in the movement direction should be prioritised over
+equidistant chunks behind. Current sort is distance-only. Weight by dot product with
+velocity direction so forward chunks jump the queue. Also cap batch submission to
+~32 tasks per schedule run so the executor queue stays shallow and new priority chunks
+aren't buried behind hundreds of already-queued distant tasks. Raise
+MAX_UPLOADS_PER_FRAME from 4 to 16 — uploads are now cheap (vertices pre-built on
+worker thread).
+
+**2. Ambient occlusion** *(after generation speed)*
+Bake per-vertex corner darkening into vertex colors at mesh-build time. Large visual
+impact, zero runtime cost, no separate light system. Integrates into ChunkMesher,
+runs on worker thread naturally.
+
+**3. Textures**
+UV attribute, texture atlas via STB, sampler2D uniform, per-block UV lookup in mesher.
+Greedy meshing needs revisiting for tiled UVs across merged quads.
+
+### Deferred to Phase 5+
+- Full light propagation
+- LOD / distant rendering
+- Caves (3D noise density functions)
+- Multiplayer: `World.update()` → `update(Collection<Vector3f>)`
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

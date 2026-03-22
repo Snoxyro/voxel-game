@@ -48,7 +48,7 @@ public class World {
      * Maximum new-chunk GPU uploads per frame.
      * Each upload also marks up to 6 neighbors dirty for async remeshing.
      */
-    private static final int MAX_UPLOADS_PER_FRAME = 4;
+    private static final int MAX_UPLOADS_PER_FRAME = 16;
 
     /**
      * Maximum neighbor remesh results applied per frame.
@@ -84,6 +84,16 @@ public class World {
 
     /** Completed remesh jobs (vertices only) waiting for GPU swap. */
     private final ConcurrentLinkedQueue<PendingRemesh> pendingRemeshes = new ConcurrentLinkedQueue<>();
+
+    /**
+     * Center chunk position from the last {@link #scheduleNeededChunks} call.
+     * Scheduling is skipped when the viewer hasn't moved to a new chunk since
+     * the last call — avoids scanning ~14 000 positions every tick for no output.
+     * Initialised to MIN_VALUE so the first tick always schedules.
+     */
+    private int lastScheduledCX = Integer.MIN_VALUE;
+    private int lastScheduledCY = Integer.MIN_VALUE;
+    private int lastScheduledCZ = Integer.MIN_VALUE;
 
     /**
      * Single background thread for all meshing work.
@@ -135,7 +145,17 @@ public class World {
         drainPendingChunks(centerCX, centerCY, centerCZ);
         drainPendingRemeshes();
         processDirtyMeshes();
-        scheduleNeededChunks(centerCX, centerCY, centerCZ);
+        // Only re-scan the load area when the viewer has crossed into a new chunk.
+        // When standing still, all needed chunks are already in inProgress from the
+        // previous schedule call — rescanning 14 000 positions produces nothing new.
+        if (centerCX != lastScheduledCX
+                || centerCY != lastScheduledCY
+                || centerCZ != lastScheduledCZ) {
+            scheduleNeededChunks(centerCX, centerCY, centerCZ);
+            lastScheduledCX = centerCX;
+            lastScheduledCY = centerCY;
+            lastScheduledCZ = centerCZ;
+        }
         unloadDistantChunks(centerCX, centerCY, centerCZ);
     }
 
@@ -266,6 +286,7 @@ public class World {
             // boundary faces toward this position when it was absent.
             // This replaces the old synchronous rebuildNeighbors() call.
             markNeighborsDirty(pending.pos());
+            dirtyMeshes.add(pending.pos()); // remesh self with current neighbor state
             uploaded++;
         }
     }
@@ -296,16 +317,32 @@ public class World {
     /**
      * Submits dirty mesh positions to the worker thread for remeshing.
      * Captures a neighbor snapshot on the main thread before submission.
-     * Skips positions already in-flight to avoid redundant work.
+     *
+     * <p>If a position is already being remeshed (in-flight), it is left in
+     * {@code dirtyMeshes} rather than discarded. This ensures that neighbor
+     * changes arriving while a remesh is in-flight are not lost — the position
+     * will be picked up and resubmitted once the in-flight result is drained.
      */
     private void processDirtyMeshes() {
         Iterator<ChunkPos> it = dirtyMeshes.iterator();
         while (it.hasNext()) {
             ChunkPos pos = it.next();
-            it.remove();
 
-            // Only remesh if chunk data still exists and isn't already being remeshed
-            if (!chunks.containsKey(pos) || remeshInProgress.contains(pos)) continue;
+            // Chunk was unloaded before we got to it — discard
+            if (!chunks.containsKey(pos)) {
+                it.remove();
+                continue;
+            }
+
+            // Already being remeshed — leave the dirty mark in place.
+            // The in-flight result was built with a stale snapshot; once it drains
+            // and clears remeshInProgress, this position will be picked up next tick
+            // with the latest neighbor state.
+            if (remeshInProgress.contains(pos)) {
+                continue;
+            }
+
+            it.remove();
 
             Chunk chunk = chunks.get(pos);
             Map<ChunkPos, Chunk> snapshot = captureNeighbors(pos);
@@ -373,6 +410,7 @@ public class World {
             Mesh mesh = meshes.remove(pos);
             if (mesh != null) mesh.cleanup();
             markNeighborsDirty(pos);
+            evictHeightmapIfColumnUnloaded(pos);
         }
     }
 
@@ -382,6 +420,21 @@ public class World {
         int dz = pos.z() - centerCZ;
         return dx * dx + dz * dz <= RENDER_DISTANCE_H * RENDER_DISTANCE_H
             && Math.abs(dy) <= RENDER_DISTANCE_V;
+    }
+
+    /**
+     * Evicts the heightmap cache entry for the given chunk's column if no other
+     * loaded chunks remain in that column. Prevents the cache from growing
+     * unbounded as the player moves through the world.
+     *
+     * @param pos the chunk that was just unloaded
+     */
+    private void evictHeightmapIfColumnUnloaded(ChunkPos pos) {
+        boolean columnStillLoaded = chunks.keySet().stream()
+            .anyMatch(p -> p.x() == pos.x() && p.z() == pos.z());
+        if (!columnStillLoaded) {
+            terrainGenerator.evictColumn(pos.x(), pos.z());
+        }
     }
 
     // -------------------------------------------------------------------------
