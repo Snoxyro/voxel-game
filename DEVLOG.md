@@ -746,6 +746,50 @@ quads need tiling UVs.
 
 ---
 
+## Entry 016 — Greedy Meshing
+**Date:** 22.03.2026
+**Phase:** 4 — Performance Optimization
+
+### What Was Done
+- Rewrote ChunkMesher.java to use greedy meshing. One mask array (int[SIZE][SIZE])
+  is reused across all six face directions and all layers. For each layer, the mask
+  records which cells have a visible face and what block type. buildMergedQuads()
+  runs the greedy merge — extends right while type matches, then down while the
+  full row width matches — and returns merged rectangles as [i, j, w, h, type].
+  Each face direction method maps the 2D scan axes back to 3D world coordinates
+  with the correct CCW winding for that direction.
+- A flat 16×16 surface now produces 1 quad instead of 256. Terrain reduction
+  varies by surface complexity.
+- No changes to Mesh.java, World.java, or any other file.
+
+### Decisions Made
+- Six separate face-direction methods rather than a generic loop — keeps the
+  winding order logic explicit and readable per direction.
+- buildMergedQuads() is extracted as a shared helper — the algorithm lives in
+  one place and is called once per layer per direction.
+- Output format is unchanged: same interleaved float array, same emitQuad calls.
+  Mesh.java's EBO conversion handles the rest transparently.
+- block.ordinal() + 1 used as mask value — 0 reserved for "no face", ordinals
+  start at 0 so +1 avoids collision with AIR.
+
+### Problems Encountered
+- None. Geometry matches previous output exactly on first run.
+
+### AI Assistance Notes
+- Claude wrote the implementation with winding order verified analytically for
+  all six face directions against the original per-block quad patterns.
+
+### Lessons / Observations
+- The greedy merge is satisfying: a single horizontal scan handles rectangles
+  of arbitrary size cleanly because consumed cells are zeroed immediately.
+- Winding order is the main hazard — the 2D scan axes (i, j) map to different
+  world axes for each face direction, and getting the CCW order wrong produces
+  invisible faces (back-face culled) with no error.
+- Textures will require revisiting this mesher — merged quads spanning multiple
+  blocks need tiled UVs, which vertex colors don't require.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 
