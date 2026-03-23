@@ -77,7 +77,7 @@ public class ServerWorld {
      * </ol>
      */
     public void tick() {
-        // Drain pending position updates
+        // --- Drain pending position updates ---
         PendingMove move;
         while ((move = pendingMoves.poll()) != null) {
             int id = move.playerId();
@@ -89,31 +89,67 @@ public class ServerWorld {
             }
         }
 
-        // --- Drain pending player connects / disconnects ---
+        // --- Drain pending player connects ---
+        // For each new player: announce all existing players to them,
+        // then announce them to all existing players. Add them last so
+        // they don't receive their own announcement.
         PlayerSession add;
-        while ((add = pendingAdds.poll()) != null) players.add(add);
+        while ((add = pendingAdds.poll()) != null) {
+            for (PlayerSession existing : players) {
+                // Tell the new player about each existing player
+                add.sendPacket(new com.voxelgame.common.network.packets.PlayerSpawnPacket(
+                    existing.getPlayerId(), existing.getUsername(),
+                    existing.getX(), existing.getY(), existing.getZ()));
+                // Tell each existing player about the new player
+                existing.sendPacket(new com.voxelgame.common.network.packets.PlayerSpawnPacket(
+                    add.getPlayerId(), add.getUsername(),
+                    add.getX(), add.getY(), add.getZ()));
+            }
+            players.add(add);
+        }
 
+        // --- Drain pending player disconnects ---
         Integer removeId;
         while ((removeId = pendingRemovals.poll()) != null) {
-            int id = removeId; // effectively final for lambda
+            int id = removeId;
             players.removeIf(p -> p.getPlayerId() == id);
+            // Announce departure to all remaining players
+            com.voxelgame.common.network.packets.PlayerDespawnPacket despawn =
+                new com.voxelgame.common.network.packets.PlayerDespawnPacket(id);
+            for (PlayerSession p : players) {
+                p.sendPacket(despawn);
+            }
         }
 
         if (players.isEmpty()) return;
 
         // --- Advance chunk streaming ---
-        // Phase 5D: replace with union of all player positions.
-        // For now, stream around the first player's position (or spawn if no movement yet).
         PlayerSession primary = players.get(0);
         world.update(
             primary.getX(), primary.getY(), primary.getZ(),
-            0, 0, 0  // zero direction = pure distance ordering, no look-ahead bias
+            0, 0, 0
         );
 
         // --- Stream chunks to / from each player ---
         Set<ChunkPos> loaded = world.getLoadedChunkPositions();
         for (PlayerSession player : players) {
             streamChunksToPlayer(player, loaded);
+        }
+
+        // --- Broadcast positions to all other players ---
+        // Runs every tick (20 TPS) — clients interpolate between updates.
+        // Only meaningful with 2+ players; the single-player case exits early above.
+        if (players.size() > 1) {
+            for (PlayerSession mover : players) {
+                com.voxelgame.common.network.packets.PlayerMoveCBPacket movePacket =
+                    new com.voxelgame.common.network.packets.PlayerMoveCBPacket(
+                        mover.getPlayerId(), mover.getX(), mover.getY(), mover.getZ());
+                for (PlayerSession other : players) {
+                    if (other.getPlayerId() != mover.getPlayerId()) {
+                        other.sendPacket(movePacket);
+                    }
+                }
+            }
         }
     }
 

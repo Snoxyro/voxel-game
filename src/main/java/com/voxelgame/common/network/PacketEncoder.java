@@ -84,6 +84,25 @@ public class PacketEncoder extends MessageToByteEncoder<Packet> {
             out.writeInt(p.worldZ());
             out.writeInt(p.blockOrdinal());
 
+        } else if (msg instanceof PlayerSpawnPacket p) {
+            out.writeByte(PacketId.PLAYER_SPAWN.id);
+            out.writeInt(p.playerId());
+            writeString(out, p.username());
+            out.writeFloat(p.x());
+            out.writeFloat(p.y());
+            out.writeFloat(p.z());
+
+        } else if (msg instanceof PlayerMoveCBPacket p) {
+            out.writeByte(PacketId.PLAYER_MOVE_CB.id);
+            out.writeInt(p.playerId());
+            out.writeFloat(p.x());
+            out.writeFloat(p.y());
+            out.writeFloat(p.z());
+
+        } else if (msg instanceof PlayerDespawnPacket p) {
+            out.writeByte(PacketId.PLAYER_DESPAWN.id);
+            out.writeInt(p.playerId());
+
         } else {
             throw new IllegalArgumentException(
                 "PacketEncoder: no serializer for " + msg.getClass().getSimpleName());

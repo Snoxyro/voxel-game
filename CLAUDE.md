@@ -141,10 +141,11 @@ component owned by `Player` — the pattern to follow.
 - **5A (done):** Package restructure, Netty, handshake/login
 - **5B (done):** Chunk streaming — server generates, client renders via TCP
 - **5C (done):** Block interaction sync — break/place packets, server broadcast
-- **5D (partial):** Player movement sync — streaming center follows player (done);
-  other-player broadcasting and RemotePlayer rendering (todo)
-- **5E:** World persistence (save/load chunks to disk)
-- **5F:** Singleplayer integration cleanup, `runServer` dedicated mode
+- **5D (done):** Player movement sync — streaming center follows player;
+  other-player broadcasting with PlayerSpawn/Move/Despawn; RemotePlayer interpolation.
+  Client-side prediction deferred indefinitely — imperceptible on localhost.
+- **5E (next):** World persistence (save/load chunks to disk)
+- **5F:** Singleplayer integration cleanup, dedicated server mode
 
 ## How to Build and Run
 ```bash
@@ -184,3 +185,6 @@ human debugging judgment that AI cannot reliably provide.
 - Do not put GL calls outside the main thread
 - Do not import `engine/` from `server/` or `game/World.java`
 - Do not add `Mesh` or rendering code to `World.java` or `ServerWorld.java`
+- Do not construct GL resources (VAOs, VBOs, textures) in constructors of classes
+  that are instantiated before GameLoop.init() — the GL context does not exist yet.
+  Use a separate initRenderResources() method called after window.init().

@@ -56,6 +56,12 @@ public class ServerHandler extends SimpleChannelInboundHandler<Packet> {
             handleUnloadChunk(p);
         } else if (msg instanceof BlockChangePacket p) {
             clientWorld.queueBlockChange(p.worldX(), p.worldY(), p.worldZ(), p.blockOrdinal());
+        } else if (msg instanceof PlayerSpawnPacket p) {
+            clientWorld.queueRemotePlayerSpawn(p.playerId(), p.username(), p.x(), p.y(), p.z());
+        } else if (msg instanceof PlayerMoveCBPacket p) {
+            clientWorld.queueRemotePlayerMove(p.playerId(), p.x(), p.y(), p.z());
+        } else if (msg instanceof PlayerDespawnPacket p) {
+            clientWorld.queueRemotePlayerDespawn(p.playerId());
         } else {
             System.out.println("[Client] Unhandled packet: " + msg.getClass().getSimpleName());
         }

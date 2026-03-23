@@ -88,6 +88,7 @@ public class GameLoop {
      */
     private void init() {
         window.init();
+        clientWorld.initRenderResources();
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glEnable(GL11.GL_CULL_FACE);
 
@@ -310,6 +311,8 @@ public class GameLoop {
             blockHighlight.render(shaderProgram,
                 lastRaycast.blockX(), lastRaycast.blockY(), lastRaycast.blockZ());
         }
+
+        clientWorld.renderRemotePlayers(shaderProgram);
 
         shaderProgram.unbind();
         hudRenderer.renderCrosshair();

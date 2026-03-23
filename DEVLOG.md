@@ -1868,6 +1868,70 @@ The fix is to scale the per-tick budgets by 3× so the per-second rate matches P
 
 ---
 
+## Entry 036 — Phase 5D: Other-Player Broadcasting and RemotePlayer Rendering
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Added three clientbound packets: `PlayerSpawnPacket`, `PlayerMoveCBPacket`,
+  `PlayerDespawnPacket`. All registered in `PacketEncoder` and `PacketDecoder`.
+- Created `RemotePlayer.java` — holds interpolation state for another connected
+  player. On each server update, `updatePosition()` snaps `prev` to the current
+  rendered position and sets a new `target`. `interpolate()` lerps between them
+  using elapsed time since the last update divided by `SERVER_TICK_MS` (50ms),
+  clamped to [0,1] to prevent overshoot when updates are delayed.
+- Created `RemotePlayerRenderer.java` — renders a solid orange box (0.6 × 1.8 × 0.6,
+  matching PhysicsBody dimensions) for each remote player. Uses the main 3D shader
+  with `useTexture=false`. Directional shading constants match ChunkMesher for visual
+  consistency. Calls `interpolate()` on each player during the render pass.
+- `ClientWorld` gained `remotePlayers` map, `remotePlayerRenderer`, and three
+  concurrent queues (`pendingSpawns`, `pendingMoves`, `pendingDespawns`).
+  `drainPendingPlayerEvents()` runs first in `update()`. `renderRemotePlayers()`
+  delegates to the renderer.
+- `ServerWorld.tick()` updated: on player connect, announces all existing players
+  to the new player and the new player to all existing players. On disconnect,
+  broadcasts `PlayerDespawnPacket` to all remaining players. After chunk streaming,
+  broadcasts `PlayerMoveCBPacket` to all other players each tick (20 TPS).
+- `ServerHandler` routes all three new clientbound packets to `ClientWorld` queues.
+- `GameLoop.render()` calls `clientWorld.renderRemotePlayers(shader)` after the
+  block highlight pass — `useTexture` is already false at that point.
+
+### Decisions Made
+- Position broadcast runs every tick (20 TPS) — clients interpolate between
+  updates. O(n²) broadcast loop is fine for any realistic player count.
+- `PlayerSpawnPacket` serves double duty: announces a new arrival to existing
+  players, and announces each existing player to a new arrival. One packet type,
+  two use cases, no duplication.
+- Server filters `PlayerMoveCBPacket` so a player never receives their own position
+  broadcast — no client-side filtering by playerId needed.
+
+### Problems Encountered
+- **GL context crash on startup.** `RemotePlayerRenderer` was constructed as a
+  field initializer in `ClientWorld`, which is instantiated in `Main.java` before
+  `GameLoop` calls `window.init()`. The GL context does not exist at that point —
+  `glGenVertexArrays` caused `EXCEPTION_ACCESS_VIOLATION` in `lwjgl_opengl.dll`.
+  Fixed by making `remotePlayerRenderer` a nullable field and adding
+  `initRenderResources()` to `ClientWorld`, called from `GameLoop.init()` immediately
+  after `window.init()`. Same root cause as the Phase 5B crash.
+
+### AI Assistance Notes
+- Copilot identified the GL context crash from the hs_err log — recognized the
+  native crash pattern and traced it back to the field initializer execution order.
+
+### Lessons / Observations
+- Any class instantiated before `GameLoop.init()` must not create GL resources in
+  its constructor or field initializers. The pattern is: nullable field + separate
+  `initRenderResources()` called after `window.init()`. Added to CLAUDE.md.
+- This is the second time this exact mistake has been made (Phase 5B was the first).
+  The fix is now documented as a hard rule.
+
+### What Remains in Phase 5D
+- Client-side prediction + server reconciliation for the local player. Deferred —
+  on localhost latency is imperceptible and the system is fully playable without it.
+  Will revisit after Phase 5E and 5F if needed.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

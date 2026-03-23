@@ -60,6 +60,15 @@ public class PacketDecoder extends MessageToMessageDecoder<ByteBuf> {
             case BLOCK_CHANGE ->
                 new BlockChangePacket(in.readInt(), in.readInt(), in.readInt(), in.readInt());
 
+            case PLAYER_SPAWN ->
+                new PlayerSpawnPacket(in.readInt(), readString(in), in.readFloat(), in.readFloat(), in.readFloat());
+
+            case PLAYER_MOVE_CB ->
+                new PlayerMoveCBPacket(in.readInt(), in.readFloat(), in.readFloat(), in.readFloat());
+
+            case PLAYER_DESPAWN ->
+                new PlayerDespawnPacket(in.readInt());
+
             default -> throw new IllegalStateException(
                 "PacketDecoder: no deserializer for " + id);
         };

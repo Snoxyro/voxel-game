@@ -44,6 +44,13 @@ import java.util.concurrent.*;
  * exactly. All GL calls stay on the main thread; all CPU work runs on workers.
  */
 public class ClientWorld implements BlockView {
+    // Remote player state — main (GL) thread only
+    private final Map<Integer, RemotePlayer> remotePlayers = new HashMap<>();
+    private RemotePlayerRenderer remotePlayerRenderer;
+
+    // Cross-thread queues for remote player events — written by Netty, drained by main thread
+    private record SpawnData(int playerId, String username, float x, float y, float z) {}
+    private record MoveData(int playerId, float x, float y, float z) {}
 
     // -------------------------------------------------------------------------
     // Chunk and mesh storage — main (GL) thread only
@@ -58,6 +65,9 @@ public class ClientWorld implements BlockView {
     private final ConcurrentLinkedQueue<ChunkPos>         pendingUnloads   = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<PendingMesh>      pendingMeshes    = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<PendingBlockChange> pendingBlockChanges = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<SpawnData>  pendingSpawns   = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<MoveData>   pendingMoves    = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Integer>    pendingDespawns = new ConcurrentLinkedQueue<>();
 
     // -------------------------------------------------------------------------
     // Mesh scheduling — main thread only
@@ -92,6 +102,14 @@ public class ClientWorld implements BlockView {
 
     /** Carrier for a server-authoritative block change. Applied on the main thread. */
     private record PendingBlockChange(int worldX, int worldY, int worldZ, int blockOrdinal) {}
+
+    /**
+     * Initializes GL-dependent resources. Must be called on the main thread after
+     * the OpenGL context has been created — i.e. after Window.init().
+     */
+    public void initRenderResources() {
+        remotePlayerRenderer = new RemotePlayerRenderer();
+    }   
 
     /**
      * Creates a ClientWorld and starts the mesh worker thread pool.
@@ -163,6 +181,30 @@ public class ClientWorld implements BlockView {
         spawnZ = z;
     }
 
+    /**
+     * Enqueues a remote player spawn received from the server.
+     * Thread-safe — called from the Netty I/O thread.
+     */
+    public void queueRemotePlayerSpawn(int playerId, String username, float x, float y, float z) {
+        pendingSpawns.offer(new SpawnData(playerId, username, x, y, z));
+    }
+
+    /**
+     * Enqueues a remote player position update received from the server.
+     * Thread-safe — called from the Netty I/O thread.
+     */
+    public void queueRemotePlayerMove(int playerId, float x, float y, float z) {
+        pendingMoves.offer(new MoveData(playerId, x, y, z));
+    }
+
+    /**
+     * Enqueues a remote player despawn received from the server.
+     * Thread-safe — called from the Netty I/O thread.
+     */
+    public void queueRemotePlayerDespawn(int playerId) {
+        pendingDespawns.offer(playerId);
+    }
+
     // -------------------------------------------------------------------------
     // Main thread update — called once per frame from GameLoop
     // -------------------------------------------------------------------------
@@ -180,6 +222,7 @@ public class ClientWorld implements BlockView {
      * </ol>
      */
     public void update() {
+        drainPendingPlayerEvents();
         drainPendingBlockChanges();
         drainPendingChunkData();
         drainPendingUnloads();
@@ -190,6 +233,29 @@ public class ClientWorld implements BlockView {
     // -------------------------------------------------------------------------
     // Internal pipeline steps — main thread only
     // -------------------------------------------------------------------------
+
+    private void drainPendingPlayerEvents() {
+        SpawnData spawn;
+        while ((spawn = pendingSpawns.poll()) != null) {
+            remotePlayers.put(spawn.playerId(),
+                new RemotePlayer(spawn.playerId(), spawn.username(), spawn.x(), spawn.y(), spawn.z()));
+            System.out.printf("[Client] Remote player '%s' (id=%d) spawned%n",
+                spawn.username(), spawn.playerId());
+        }
+
+        MoveData move;
+        while ((move = pendingMoves.poll()) != null) {
+            RemotePlayer rp = remotePlayers.get(move.playerId());
+            if (rp != null) rp.updatePosition(move.x(), move.y(), move.z());
+        }
+
+        Integer despawnId;
+        while ((despawnId = pendingDespawns.poll()) != null) {
+            RemotePlayer rp = remotePlayers.remove(despawnId);
+            if (rp != null) System.out.printf("[Client] Remote player '%s' (id=%d) despawned%n",
+                rp.getUsername(), despawnId);
+        }
+    }
 
     private void drainPendingBlockChanges() {
         PendingBlockChange change;
@@ -385,6 +451,17 @@ public class ClientWorld implements BlockView {
         return new int[]{ visible, meshes.size() };
     }
 
+    /**
+     * Renders all remote players. The main shader must be bound with
+     * {@code useTexture=false} before calling.
+     *
+     * @param shader the currently bound shader program
+     */
+    public void renderRemotePlayers(ShaderProgram shader) {
+            if (remotePlayerRenderer == null) return;
+            remotePlayerRenderer.render(shader, remotePlayers.values());
+    }
+
     // -------------------------------------------------------------------------
     // Lifecycle
     // -------------------------------------------------------------------------
@@ -395,6 +472,7 @@ public class ClientWorld implements BlockView {
      */
     public void cleanup() {
         meshExecutor.shutdownNow();
+        if (remotePlayerRenderer != null) remotePlayerRenderer.cleanup();
         for (Mesh mesh : meshes.values()) mesh.cleanup();
         meshes.clear();
         chunks.clear();
