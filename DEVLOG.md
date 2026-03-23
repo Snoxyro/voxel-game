@@ -1932,6 +1932,70 @@ The fix is to scale the per-tick budgets by 3× so the per-second rate matches P
 
 ---
 
+## Entry 035 — Phase 5E: World Persistence
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Created `ChunkStorage` interface in `com.voxelgame.game` — two methods:
+  `save(ChunkPos, byte[])` and `load(ChunkPos) → byte[]`. Works in raw bytes
+  to stay free of game-type dependencies and match the existing `Chunk.toBytes()`
+  / `Chunk.fromBytes()` serialization from Phase 5B.
+- Created `FlatFileChunkStorage implements ChunkStorage` in
+  `com.voxelgame.server.storage` — one GZIP-compressed `.dat` file per chunk
+  under `worlds/default/chunks/<cx>_<cy>_<cz>.dat`. Directory created automatically
+  on construction. Thread-safe: stateless beyond the immutable `chunksDir` path.
+- Added dirty tracking to `World` — `ConcurrentHashMap.newKeySet()` for
+  `dirtyChunks`. `setBlock()` adds the affected `ChunkPos` after every mutation.
+- Added background save executor to `World` — single daemon thread (`chunk-saver`).
+  `saveDirtyChunks()` drains the dirty set each tick, captures a `chunk.toBytes()`
+  defensive copy per chunk, and submits it to the save executor. Tick thread never
+  blocks on disk I/O.
+- Modified `submitToExecutor()` in `World` — generation tasks now check disk first
+  via `storage.load(pos)`. If a saved file exists, `Chunk.fromBytes()` is used
+  instead of terrain generation. Both paths feed the same `pendingChunks` queue —
+  the rest of the pipeline is unchanged.
+- Added `flushDirtyChunks()` to `World` — called from `cleanup()` before executor
+  shutdown. Saves all remaining dirty chunks synchronously, then waits up to 10s
+  for in-flight background saves to complete. Guarantees no writes are lost on a
+  clean server stop.
+- `ServerWorld` constructor now accepts `ChunkStorage` and passes it to `World`.
+- `GameServer` constructs `FlatFileChunkStorage(Path.of("worlds", "default"))` and
+  passes it to `ServerWorld`.
+
+### Decisions Made
+- **Save only modified chunks, not all generated chunks.** Unmodified chunks are
+  identical to what terrain generation produces from the seed — saving them wastes
+  disk space and write time for zero benefit. The set of `.dat` files is exactly
+  the diff between the world and its seed.
+- **`ChunkStorage` interface from day one.** The migration to region files later
+  becomes a single swap in `GameServer` — `RegionFileChunkStorage implements
+  ChunkStorage`. Nothing else changes.
+- **Delta/diff saving considered and rejected.** Saving individual block changes
+  instead of full chunks would require replaying N mutations on top of fresh
+  generation at load time. The storage savings are marginal (crossover ~30-80
+  changed blocks per chunk); the added code paths and replay complexity are not
+  worth it at this scale.
+- **Multiple worlds deferred.** `FlatFileChunkStorage` already accepts any `Path`,
+  so world selection falls out naturally from Phase 5F CLI args. Nothing to design now.
+
+### Problems Encountered
+- None. First run created `worlds/default/chunks/`, wrote `.dat` files for
+  modified chunks, and correctly restored them after a server restart.
+
+### AI Assistance Notes
+- Claude wrote all new and modified files with full explanation of dirty tracking,
+  the defensive copy pattern, and the load-or-generate executor task.
+
+### Lessons / Observations
+- Defensive copies (`chunk.toBytes()`) before handing data to a background thread
+  are the correct primitive here — the save executor never needs synchronization
+  because it only ever sees immutable byte arrays.
+- The `ChunkStorage` interface cost nothing and buys a clean swap point for region
+  files later. Interfaces on I/O boundaries are almost always worth it.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

@@ -70,6 +70,33 @@ public class World implements BlockView {
     private int lastScheduledCY = Integer.MIN_VALUE;
     private int lastScheduledCZ = Integer.MIN_VALUE;
 
+    // -------------------------------------------------------------------------
+    // Persistence — dirty tracking and background save queue
+    // -------------------------------------------------------------------------
+
+    /**
+     * Chunks modified since their last save. Uses a concurrent set because
+     * setBlock() can be called from the Netty I/O thread (Phase 5C), while the
+     * drain loop runs on the server tick thread.
+     */
+    private final Set<ChunkPos> dirtyChunks = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Single background thread for GZIP writes. Always receives a defensive
+     * byte[] copy from chunk.toBytes() — never races with the tick thread.
+     */
+    private final ExecutorService saveExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "chunk-saver");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * Chunk persistence backend. {@code null} disables persistence entirely
+     * (no-op path kept for clean interface — unused case in this project).
+     */
+    private final ChunkStorage storage;
+
     private final ExecutorService generationExecutor = Executors.newFixedThreadPool(
         Math.max(1, Runtime.getRuntime().availableProcessors() - 1), r -> {
             Thread t = new Thread(r, "chunk-generator");
@@ -88,8 +115,9 @@ public class World implements BlockView {
      *
      * @param seed world seed — same seed always produces identical terrain
      */
-    public World(long seed) {
+    public World(long seed, ChunkStorage storage) {
         this.terrainGenerator = new TerrainGenerator(seed);
+        this.storage = storage;
     }
 
     // -------------------------------------------------------------------------
@@ -124,6 +152,7 @@ public class World implements BlockView {
 
         tickGenerationQueue(centerCX, centerCY, centerCZ, dirX, dirY, dirZ);
         unloadDistantChunks(centerCX, centerCY, centerCZ);
+        saveDirtyChunks(); // flush block changes to disk at end of each tick
     }
 
     // -------------------------------------------------------------------------
@@ -177,6 +206,8 @@ public class World implements BlockView {
             Math.floorMod(worldZ, Chunk.SIZE),
             block
         );
+        // Mark modified — will be flushed to disk at end of current tick
+        dirtyChunks.add(new ChunkPos(cx, cy, cz));
     }
 
     // -------------------------------------------------------------------------
@@ -215,6 +246,7 @@ public class World implements BlockView {
      * Call once on server shutdown.
      */
     public void cleanup() {
+        flushDirtyChunks(); // persist all pending writes before shutdown
         generationExecutor.shutdownNow();
         chunks.clear();
     }
@@ -273,6 +305,51 @@ public class World implements BlockView {
         for (ChunkPos pos : toUnload) {
             chunks.remove(pos);
             evictHeightmapIfColumnUnloaded(pos);
+        }
+    }
+
+    /**
+     * Submits all dirty chunks to the background save executor.
+     * Each chunk snapshot ({@link Chunk#toBytes()}) is an immutable defensive copy,
+     * so the executor thread never races with the tick thread modifying block data.
+     * Called at the end of each tick in {@link #update}.
+     */
+    private void saveDirtyChunks() {
+        if (storage == null || dirtyChunks.isEmpty()) return;
+
+        Iterator<ChunkPos> it = dirtyChunks.iterator();
+        while (it.hasNext()) {
+            ChunkPos pos = it.next();
+            it.remove();
+            Chunk chunk = chunks.get(pos);
+            if (chunk == null) continue; // chunk unloaded before save could run — skip
+            byte[] data = chunk.toBytes(); // defensive copy — safe to hand off to executor
+            saveExecutor.execute(() -> storage.save(pos, data));
+        }
+    }
+
+    /**
+     * Saves all dirty chunks synchronously and waits for any in-flight background
+     * saves to complete. Called from {@link #cleanup()} before executors shut down —
+     * guarantees no writes are lost on a clean server stop.
+     */
+    public void flushDirtyChunks() {
+        if (storage == null) return;
+        Iterator<ChunkPos> it = dirtyChunks.iterator();
+        while (it.hasNext()) {
+            ChunkPos pos = it.next();
+            it.remove();
+            Chunk chunk = chunks.get(pos);
+            if (chunk != null) storage.save(pos, chunk.toBytes());
+        }
+        // Drain the background executor — wait for any writes already in-flight
+        saveExecutor.shutdown();
+        try {
+            if (!saveExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                System.err.println("[World] Save executor did not finish in 10s — some chunks may be unsaved.");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -353,8 +430,16 @@ public class World implements BlockView {
      */
     private void submitToExecutor(ChunkPos pos) {
         inProgress.add(pos);
+        // Capture storage reference — lambda must not access mutable instance state
+        final ChunkStorage storageRef = this.storage;
         generationExecutor.submit(() -> {
-            Chunk chunk = terrainGenerator.generateChunk(pos);
+            // Check disk first. If a save file exists, deserialize it instead of
+            // running terrain generation. Both paths produce the same Chunk type —
+            // the rest of the pipeline (pendingChunks → drainPendingChunks) is identical.
+            byte[] saved = storageRef != null ? storageRef.load(pos) : null;
+            Chunk chunk = (saved != null)
+                ? Chunk.fromBytes(saved)
+                : terrainGenerator.generateChunk(pos);
             pendingChunks.offer(new PendingChunk(pos, chunk));
         });
     }

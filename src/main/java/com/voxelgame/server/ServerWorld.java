@@ -4,6 +4,7 @@ import com.voxelgame.common.network.packets.ChunkDataPacket;
 import com.voxelgame.common.network.packets.UnloadChunkPacket;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
+import com.voxelgame.game.ChunkStorage;
 import com.voxelgame.game.World;
 
 import java.util.ArrayList;
@@ -60,9 +61,10 @@ public class ServerWorld {
      * Creates a ServerWorld with the given world seed.
      *
      * @param seed world generation seed — same seed produces identical terrain every run
+     * @param storage chunk storage implementation for persistence
      */
-    public ServerWorld(long seed) {
-        this.world = new World(seed);
+    public ServerWorld(long seed, ChunkStorage storage) {
+        this.world = new World(seed, storage);
     }
 
     /**

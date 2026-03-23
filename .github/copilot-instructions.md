@@ -28,14 +28,16 @@ com.voxelgame.
 │   ├── GameServer.java        ← 20 TPS game loop
 │   ├── PlayerSession.java
 │   ├── ServerWorld.java
-│   └── network/               ← ServerNetworkManager, ClientHandler
+│   ├── network/               ← ServerNetworkManager, ClientHandler
+│   └── storage/               ← FlatFileChunkStorage (ChunkStorage impl)
 ├── client/                    ← client-side logic
 │   ├── ClientWorld.java       ← receives chunks from server, meshes + renders
 │   └── network/               ← ClientNetworkManager, ServerHandler
 ├── engine/                    ← GL/GLFW systems — client main thread only
 │   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, etc.
 └── game/                      ← server-side gameplay
-    └── World (chunk data only — NO GL), TerrainGenerator, ChunkMesher, Player
+    └── World (chunk data + persistence), TerrainGenerator, ChunkMesher,
+        Player, ChunkStorage (interface)
 ```
 
 ## Architecture Principles
@@ -93,14 +95,16 @@ capture a snapshot before handing work to a background thread.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 5 — Multiplayer. Sub-phase 5E next.
+Phase 5 — Multiplayer. Sub-phase 5F next.
 - 5A done: package restructure, Netty, handshake/login
 - 5B done: chunk streaming (server generates, client receives and renders)
 - 5C done: block interaction sync (break/place/broadcast)
 - 5D done: player movement sync, streaming center follows player,
   other-player broadcasting, RemotePlayer with interpolation
-- 5E next: world persistence (save/load chunks to disk)
-- 5F after: singleplayer integration cleanup, dedicated server mode
+- 5E done: world persistence — ChunkStorage interface, FlatFileChunkStorage,
+  dirty tracking, background save executor, load-from-disk-or-generate
+- 5F next: singleplayer integration cleanup, dedicated server mode, CLI args,
+  world.dat seed file
 
 ## Key Constraints
 - Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`

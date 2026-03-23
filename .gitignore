@@ -29,3 +29,6 @@ logs/
 
 # Native libraries (downloaded by LWJGL at runtime)
 natives/
+
+# World files
+worlds/

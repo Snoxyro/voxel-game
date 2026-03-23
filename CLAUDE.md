@@ -54,9 +54,10 @@ src/main/java/com/voxelgame/
 │   ├── GameServer.java        ← 20 TPS game loop, player login/disconnect callbacks
 │   ├── PlayerSession.java     ← per-client state: channel, position, loaded chunk set
 │   ├── ServerWorld.java       ← wraps World, drives chunk streaming per player
-│   └── network/
-│       ├── ServerNetworkManager.java
-│       └── ClientHandler.java
+│   ├── network/
+│   |   ├── ServerNetworkManager.java
+│   |   └── ClientHandler.java
+│   └── storage/               ← FlatFileChunkStorage (ChunkStorage impl)
 ├── client/                    ← client-side: rendering, input, local world state
 │   ├── ClientWorld.java       ← receives chunks from server, meshes + renders them
 │   └── network/
@@ -76,7 +77,8 @@ src/main/java/com/voxelgame/
 │   ├── World.java             ← chunk data manager: generation, storage, load/unload (NO GL)
 │   ├── TerrainGenerator.java
 │   ├── ChunkMesher.java       ← stateless, thread-safe — used by ClientWorld on worker threads
-│   └── Player.java
+│   ├── Player.java
+|   └── ChunkStorage.java
 └── util/
     └── OpenSimplex2S.java
 
@@ -144,8 +146,10 @@ component owned by `Player` — the pattern to follow.
 - **5D (done):** Player movement sync — streaming center follows player;
   other-player broadcasting with PlayerSpawn/Move/Despawn; RemotePlayer interpolation.
   Client-side prediction deferred indefinitely — imperceptible on localhost.
-- **5E (next):** World persistence (save/load chunks to disk)
-- **5F:** Singleplayer integration cleanup, dedicated server mode
+- **5E (done):** World persistence — ChunkStorage interface, FlatFileChunkStorage,
+  dirty tracking, background save queue, load-from-disk-or-generate on executor
+- **5F (current):** Singleplayer integration cleanup, dedicated server mode, CLI args,
+  world.dat seed file (seed per world, not hardcoded)
 
 ## How to Build and Run
 ```bash

@@ -1,8 +1,11 @@
 package com.voxelgame.server;
 
 import com.voxelgame.server.network.ServerNetworkManager;
+import com.voxelgame.server.storage.FlatFileChunkStorage;
+
 import io.netty.channel.Channel;
 
+import java.nio.file.Path;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -67,7 +70,8 @@ public class GameServer {
      * @param port TCP port to listen on
      */
     public GameServer(int port) {
-        this.serverWorld = new ServerWorld(WORLD_SEED);
+        FlatFileChunkStorage storage = new FlatFileChunkStorage(Path.of("worlds", "default"));
+        this.serverWorld = new ServerWorld(WORLD_SEED, storage);
         this.network     = new ServerNetworkManager(port, this);
     }
 
