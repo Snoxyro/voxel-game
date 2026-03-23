@@ -1,6 +1,7 @@
 package com.voxelgame.game;
 
-import com.voxelgame.common.world.Block;
+import com.voxelgame.common.world.BlockType;
+import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
 import com.voxelgame.util.OpenSimplex2S;
@@ -152,7 +153,7 @@ public class TerrainGenerator {
             for (int x = 0; x < Chunk.SIZE; x++)
                 for (int y = 0; y < Chunk.SIZE; y++)
                     for (int z = 0; z < Chunk.SIZE; z++)
-                        chunk.setBlock(x, y, z, Block.STONE);
+                        chunk.setBlock(x, y, z, Blocks.STONE);
             return chunk;
         }
 
@@ -175,13 +176,13 @@ public class TerrainGenerator {
                     int worldY = chunkWorldY + y;
                     if (worldY > surfaceHeight) continue;
 
-                    Block block;
+                    BlockType block;
                     if (worldY == surfaceHeight) {
-                        block = Block.GRASS;
+                        block = Blocks.GRASS;
                     } else if (worldY >= surfaceHeight - DIRT_DEPTH) {
-                        block = Block.DIRT;
+                        block = Blocks.DIRT;
                     } else {
-                        block = Block.STONE;
+                        block = Blocks.STONE;
                     }
                     chunk.setBlock(x, y, z, block);
                 }

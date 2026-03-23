@@ -2109,6 +2109,87 @@ listeners. Has something meaningful to offer because the game underneath it is b
 
 ---
 
+## Entry 038 — Phase 6A: Block Registry
+**Date:** 23.03.2026
+**Phase:** 6 — Foundation for extensibility
+
+### What Was Done
+- Created `TextureLayers.java` in `common/world/` — moved texture layer index constants
+  out of `engine/TextureManager` and into `common/`. This cuts the `common/ → engine/`
+  import dependency that existed because `Block` referenced `TextureManager.LAYER_*`.
+  `TextureManager` now re-exports the constants by referencing `TextureLayers` — one
+  source of truth, no circular dependency.
+- Created `BlockType.java` in `common/world/` — immutable registered block type with
+  fields: `id`, `name`, `solid`, `topTextureLayer`, `sideTextureLayer`,
+  `bottomTextureLayer`. Package-private constructor — only `BlockRegistry` creates instances.
+  Identity comparison (`==`) remains valid and efficient.
+- Created `BlockRegistry.java` in `common/world/` — static registry. `register()` assigns
+  IDs sequentially from 0. `getById(int)` and `getByName(String)` for lookups. ID array
+  grows dynamically (doubles). Thread-safe registration; unsynchronised reads safe after
+  startup.
+- Created `Blocks.java` in `common/world/` — static constants `AIR` (ID 0), `GRASS`,
+  `DIRT`, `STONE` registered in a `static` block. Registration order is permanent —
+  append-only, never reorder. `bootstrap()` triggers class loading explicitly at startup.
+- Deleted `Block.java` — the old enum. Replaced throughout the codebase.
+- Updated `Chunk.java` — block storage changed from `byte[]` (ordinals, 4096 bytes) to
+  `short[]` (registry IDs, 8192 bytes). `SERIALIZED_SIZE = 8192`. `toBytes()`/`fromBytes()`
+  serialize big-endian unsigned shorts. `getBlock()` returns `BlockType`.
+  `setBlock()` takes `BlockType`. `BLOCK_VALUES` cache removed.
+- Updated `BlockView.java` — `getBlock()` return type `Block` → `BlockType`.
+- Updated `ChunkMesher.java` — `packMask` bit layout expanded: bits 0–16 for block ID
+  (was bits 0–2), AO shifted to bits 17–24 (was 3–10). `packMask` call sites changed
+  from `b.ordinal() + 1` to `b.getId()`. Extraction in `buildMergedQuads` updated to
+  match. Block reconstruction changed from `Block.values()[n-1]` to
+  `BlockRegistry.getById(n)`. AIR checks use `Blocks.AIR`.
+- Updated `TextureManager.java` — `LAYER_*` constants now delegate to `TextureLayers`.
+- Cascading migration across: `TerrainGenerator`, `RayCaster`, `PhysicsBody`, `World`,
+  `ClientWorld`, `BlockChangePacket`, `BlockPlacePacket`, `PacketEncoder`, `PacketDecoder`,
+  `ServerWorld`, `ClientHandler`, `ServerHandler`, `GameLoop`, `Main`, `ServerMain`.
+  All `Block.X` → `Blocks.X`, all `blockOrdinal` → `blockId`, all `Block` types →
+  `BlockType`. `Blocks.bootstrap()` added as first line of both `main()` entry points.
+
+### Decisions Made
+- **ID 0 = AIR is a permanent architectural contract.** `Chunk` zero-initialises its
+  `short[]` and relies on 0 meaning AIR. `Blocks` static block registers AIR first,
+  guaranteeing this forever.
+- **Append-only registration order.** Adding a block between two existing ones would
+  shift IDs and corrupt every save file and in-flight packet. The rule is the same as
+  a database migration — new entries go at the end only.
+- **`Blocks.bootstrap()` called explicitly.** Static initializers fire lazily on first
+  class access, which is non-deterministic. Explicit bootstrap at the top of `main()`
+  guarantees registration happens before any other code runs.
+- **Old save files are incompatible.** Chunks were previously stored as 4096-byte ordinal
+  arrays; they are now 8192-byte registry ID arrays. The `worlds/` directory was deleted
+  before first run. `fromBytes()` validates length and throws on mismatch — a corrupt or
+  old-format file falls back to generation rather than loading wrong block types.
+
+### Problems Encountered
+- None at runtime. Copilot caught two additional compile-time breakages outside the
+  listed files (`ServerHandler.java` still used `p.blockOrdinal()`; `ChunkMesher.java`
+  had a stale `Chunk.isAir()` call) and fixed them in the same pass.
+
+### AI Assistance Notes
+- Claude wrote all five new files (`TextureLayers`, `BlockType`, `BlockRegistry`,
+  `Blocks`, updated `Chunk`) in full, with the ChunkMesher bit layout changes and
+  explanation.
+- Copilot handled the mechanical cascade migration across 14 files via a single
+  structured prompt, plus two self-identified compile fixes. BUILD SUCCESSFUL on
+  first Copilot compile attempt.
+
+### Lessons / Observations
+- Enum ordinals as serialized IDs is a trap that is trivial to avoid at design time
+  and expensive to fix later. Any value that crosses a persistence or network boundary
+  needs a stable, explicitly assigned ID — not a position-derived one.
+- The `common/ → engine/` import was transitive and silent. Java's class loader
+  inlined the `TextureManager` constants so the server never actually loaded the GL
+  class. It worked by accident. Moving constants to `common/` makes the boundary
+  explicit and verifiable.
+- With 4 block types (IDs 0–3), the old 3-bit mask layout would have continued to
+  work for a long time before breaking. Fixing the bit layout now costs nothing;
+  fixing it after the first block with ID ≥ 8 would have required a save file migration.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

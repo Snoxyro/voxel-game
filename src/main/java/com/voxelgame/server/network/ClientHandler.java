@@ -3,6 +3,8 @@ package com.voxelgame.server.network;
 import com.voxelgame.common.network.Packet;
 import com.voxelgame.common.network.PacketId;
 import com.voxelgame.common.network.packets.*;
+import com.voxelgame.common.world.BlockRegistry;
+import com.voxelgame.common.world.BlockType;
 import com.voxelgame.server.GameServer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -109,7 +111,8 @@ public class ClientHandler extends SimpleChannelInboundHandler<Packet> {
         if (msg instanceof BlockBreakPacket p) {
             server.getServerWorld().applyBlockBreak(p.worldX(), p.worldY(), p.worldZ());
         } else if (msg instanceof BlockPlacePacket p) {
-            server.getServerWorld().applyBlockPlace(p.worldX(), p.worldY(), p.worldZ(), p.blockOrdinal());
+            BlockType blockType = BlockRegistry.getById(p.blockId());
+            server.getServerWorld().applyBlockPlace(p.worldX(), p.worldY(), p.worldZ(), blockType);
         } else if (msg instanceof PlayerMoveSBPacket p) {
             // Queue the position update for the tick thread via ServerWorld.
             // Direct field write avoided — goes through the same queue pattern as connects/disconnects.

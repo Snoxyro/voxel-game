@@ -1,13 +1,16 @@
 package com.voxelgame.common.world;
 
-import java.util.Arrays;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /**
  * Represents a fixed-size 3D chunk of blocks.
  *
- * <p>Blocks are stored as a flat {@code byte[]} of ordinal values — a single
- * contiguous 4 KB allocation that is significantly more cache-friendly than a
- * {@code Block[][][]} of scattered enum references.
+ * <p>Blocks are stored as a flat {@code short[]} of registry IDs — a single
+ * contiguous 8 KB allocation. Registry ID 0 = {@link Blocks#AIR}, which matches
+ * Java's default zero-initialisation of short arrays — no explicit fill needed.
+ * This is an architectural contract: {@link Blocks} guarantees AIR is always
+ * registered first and always receives ID 0.
  *
  * <p>Index formula: {@code x * SIZE * SIZE + y * SIZE + z}.
  * Y is the innermost stride so that filling or reading a full column in Y order
@@ -15,32 +18,39 @@ import java.util.Arrays;
  *
  * <p>A solid block count and a Y occupancy range are maintained on every
  * {@link #setBlock} call. The mesher uses these to skip empty chunks entirely
- * and to clamp its layer loops to the occupied Y band, avoiding iteration over
- * guaranteed-empty layers.
+ * and to clamp its layer loops to the occupied Y band.
  *
  * <p>A chunk stores {@value #SIZE} × {@value #SIZE} × {@value #SIZE} blocks and
- * initialises all positions to {@link Block#AIR} (ordinal 0).
+ * initialises all positions to {@link Blocks#AIR} (ID 0).
+ *
+ * <h3>Serialization format</h3>
+ * {@link #toBytes()} / {@link #fromBytes(byte[])} produce/consume {@link #SERIALIZED_SIZE}
+ * bytes: each block is stored as a big-endian unsigned short (2 bytes) containing its
+ * registry ID. This format is used for both network transmission and disk persistence.
+ * Save files written by an earlier format (4096 bytes) are incompatible and must be
+ * deleted before upgrading.
  */
 public class Chunk {
 
     /** The edge length of this chunk in blocks. */
     public static final int SIZE = 16;
 
-    /** Total number of blocks in a chunk. */
+    /** Total number of blocks in a chunk (SIZE³). */
     private static final int VOLUME = SIZE * SIZE * SIZE;
 
     /**
-     * Flat block storage. Each byte is the {@link Block#ordinal()} of the block
-     * at that position. {@link Block#AIR} has ordinal 0, which matches Java's
-     * default zero-initialisation of byte arrays — no explicit fill needed.
+     * Byte length of the serialised chunk. Each block is 2 bytes (big-endian short
+     * registry ID), so this is {@link #VOLUME} × 2 = 8192.
+     * Used by {@link #toBytes()}, {@link #fromBytes(byte[])}, and network packets.
      */
-    private final byte[] blocks;
+    public static final int SERIALIZED_SIZE = VOLUME * Short.BYTES; // 8192
 
     /**
-     * Cached reference to {@code Block.values()} to avoid repeated calls to
-     * the synthetic {@code values()} method during block lookups.
+     * Flat block storage. Each short is the {@link BlockRegistry} ID of the block
+     * at that position. {@link Blocks#AIR} has ID 0, which matches Java's default
+     * zero-initialisation of short arrays — no explicit fill needed.
      */
-    private static final Block[] BLOCK_VALUES = Block.values();
+    private final short[] blocks;
 
     /**
      * Number of non-air blocks currently in this chunk.
@@ -54,155 +64,118 @@ public class Chunk {
      * layers above and below the actual content.
      *
      * <p>These bounds only expand on block placement, never shrink on removal.
-     * After a boundary block is broken the range may be slightly wider than the
-     * true occupied range — the mesher scans a few extra empty layers at worst,
-     * which is always correct.
-     *
-     * <p>Sentinels when empty: {@code minOccupiedY = SIZE}, {@code maxOccupiedY = -1}.
+     * Sentinels when empty: {@code minOccupiedY = SIZE}, {@code maxOccupiedY = -1}.
      * Only read these when {@link #isAllAir()} is false.
      */
     private int minOccupiedY = SIZE;
     private int maxOccupiedY = -1;
 
     /**
-     * Creates a new chunk with all block positions initialised to {@link Block#AIR}.
+     * Creates a new chunk with all block positions initialised to {@link Blocks#AIR} (ID 0).
      */
     public Chunk() {
-        this.blocks = new byte[VOLUME];
+        this.blocks = new short[VOLUME];
+        // Java zero-initialises arrays — all 0s = all AIR IDs. No fill needed.
     }
 
     /**
      * Gets the block at the given local chunk coordinates.
      *
-     * @param x local X coordinate [0, SIZE)
-     * @param y local Y coordinate [0, SIZE)
-     * @param z local Z coordinate [0, SIZE)
-     * @return {@link Block#AIR} if coordinates are out of bounds; otherwise the
-     *         block stored at that position
-     */
-    public Block getBlock(int x, int y, int z) {
-        if (!isInBounds(x, y, z)) return Block.AIR;
-        return BLOCK_VALUES[blocks[index(x, y, z)] & 0xFF];
-    }
-
-    /**
-     * Sets the block at the given local chunk coordinates and updates the solid
-     * block count and Y occupancy range accordingly.
-     *
-     * @param x     local X coordinate [0, SIZE)
-     * @param y     local Y coordinate [0, SIZE)
-     * @param z     local Z coordinate [0, SIZE)
-     * @param block the block type to store
-     */
-    public void setBlock(int x, int y, int z, Block block) {
-        if (!isInBounds(x, y, z)) return;
-        int  idx  = index(x, y, z);
-        byte prev = blocks[idx];
-        byte next = (byte) block.ordinal();
-        if (prev == next) return; // no state change — skip bookkeeping
-
-        blocks[idx] = next;
-
-        boolean wasAir = (prev == 0);
-        boolean nowAir = (next == 0);
-
-        if (wasAir && !nowAir) {
-            // Placed a solid block — expand occupancy range and increment count
-            solidCount++;
-            if (y < minOccupiedY) minOccupiedY = y;
-            if (y > maxOccupiedY) maxOccupiedY = y;
-        } else if (!wasAir && nowAir) {
-            // Removed a solid block — shrinking the range would require a full
-            // scan, so we leave it wide. The mesher will scan a few extra empty
-            // layers at worst, which is always correct.
-            solidCount--;
-        }
-        // Non-air to non-air replacement: count unchanged, range already covers y
-    }
-
-    /**
-     * Returns true if the block at the given local coordinates is air.
-     * Skips the BLOCK_VALUES lookup — faster in the mesher's hot path.
-     *
      * @param x local X [0, SIZE)
      * @param y local Y [0, SIZE)
      * @param z local Z [0, SIZE)
-     * @return {@code true} if out of bounds or the block is {@link Block#AIR}
+     * @return the registered block type at that position, never null
      */
-    public boolean isAir(int x, int y, int z) {
-        if (!isInBounds(x, y, z)) return true;
-        return blocks[index(x, y, z)] == 0;
+    public BlockType getBlock(int x, int y, int z) {
+        // & 0xFFFF converts signed short to unsigned int for the registry lookup.
+        return BlockRegistry.getById(blocks[x * SIZE * SIZE + y * SIZE + z] & 0xFFFF);
     }
 
     /**
-     * Returns true if this chunk contains no solid blocks.
-     * The mesher uses this for an O(1) fast-path that skips all six face passes.
+     * Sets the block at the given local chunk coordinates.
+     * Maintains {@code solidCount} and Y occupancy bounds.
      *
-     * @return {@code true} if solidCount is zero
+     * @param x    local X [0, SIZE)
+     * @param y    local Y [0, SIZE)
+     * @param z    local Z [0, SIZE)
+     * @param type the block type to place
      */
-    public boolean isAllAir() {
-        return solidCount == 0;
+    public void setBlock(int x, int y, int z, BlockType type) {
+        int idx = x * SIZE * SIZE + y * SIZE + z;
+        boolean wasAir = (blocks[idx] == 0); // ID 0 = AIR
+        boolean isAir  = (type.getId() == 0);
+
+        if (wasAir && !isAir) solidCount++;
+        if (!wasAir && isAir) solidCount--;
+
+        blocks[idx] = (short) type.getId();
+
+        if (!isAir) {
+            if (y < minOccupiedY) minOccupiedY = y;
+            if (y > maxOccupiedY) maxOccupiedY = y;
+        }
     }
 
     /**
-     * Returns the lowest local Y coordinate that contains a non-air block.
-     * Only meaningful when {@link #isAllAir()} returns false.
+     * Returns {@code true} if every block in this chunk is air.
+     * O(1) — uses the maintained {@code solidCount}.
      *
-     * @return minimum occupied Y in [0, SIZE)
+     * @return {@code true} if all air
      */
+    public boolean isAllAir() { return solidCount == 0; }
+
+    /** Returns the lowest Y layer that contains a non-air block. Sentinel = SIZE when empty. */
     public int getMinOccupiedY() { return minOccupiedY; }
 
-    /**
-     * Returns the highest local Y coordinate that contains a non-air block.
-     * Only meaningful when {@link #isAllAir()} returns false.
-     *
-     * @return maximum occupied Y in [0, SIZE)
-     */
+    /** Returns the highest Y layer that contains a non-air block. Sentinel = -1 when empty. */
     public int getMaxOccupiedY() { return maxOccupiedY; }
 
     /**
-     * Returns the flat array index for the given local coordinates.
-     * Y is the innermost stride — sequential Y increments are sequential memory.
-     */
-    private static int index(int x, int y, int z) {
-        return x * SIZE * SIZE + y * SIZE + z;
-    }
-
-    private static boolean isInBounds(int x, int y, int z) {
-        return x >= 0 && x < SIZE
-            && y >= 0 && y < SIZE
-            && z >= 0 && z < SIZE;
-    }
-
-    /**
-     * Returns a copy of the raw block ordinal array for network transmission and persistence.
-     * The format matches {@link #fromBytes}: index = x*SIZE*SIZE + y*SIZE + z, value = ordinal.
+     * Serialises this chunk's block array to a {@code byte[]} of exactly
+     * {@link #SERIALIZED_SIZE} bytes.
      *
-     * @return a 4096-byte defensive copy of the internal block array
+     * <p>Each block is stored as a big-endian unsigned short (2 bytes) containing
+     * its registry ID. Format: {@code [id0_high][id0_low][id1_high][id1_low]...}
+     *
+     * <p>Used for both network transmission ({@code ChunkDataPacket}) and disk
+     * persistence ({@code FlatFileChunkStorage}). The two share the same format
+     * intentionally — received chunk data can be written to disk with no conversion.
+     *
+     * @return 8192-byte serialised block array
      */
     public byte[] toBytes() {
-        return Arrays.copyOf(blocks, blocks.length);
+        ByteBuffer buf = ByteBuffer.allocate(SERIALIZED_SIZE).order(ByteOrder.BIG_ENDIAN);
+        for (short id : blocks) {
+            buf.putShort(id);
+        }
+        return buf.array();
     }
 
     /**
-     * Reconstructs a Chunk from raw bytes produced by {@link #toBytes()}.
-     * AIR blocks (ordinal 0) are skipped — they are the default.
-     * Correctly maintains solidCount and Y occupancy range via setBlock.
+     * Deserialises a chunk from a {@code byte[]} produced by {@link #toBytes()}.
+     * Rebuilds {@code solidCount} and Y occupancy bounds from scratch.
      *
-     * @param data 4096 bytes — must be exactly SIZE³ in length
-     * @return a new Chunk with all blocks set
+     * @param data byte array of exactly {@link #SERIALIZED_SIZE} bytes
+     * @return the reconstructed chunk
+     * @throws IllegalArgumentException if {@code data.length != SERIALIZED_SIZE}
      */
     public static Chunk fromBytes(byte[] data) {
-        if (data.length != SIZE * SIZE * SIZE)
-            throw new IllegalArgumentException("Invalid chunk data length: " + data.length);
+        if (data.length != SERIALIZED_SIZE) {
+            throw new IllegalArgumentException(
+                "Chunk.fromBytes: expected " + SERIALIZED_SIZE + " bytes, got " + data.length);
+        }
         Chunk chunk = new Chunk();
-        for (int i = 0; i < data.length; i++) {
-            int ordinal = data[i] & 0xFF;
-            if (ordinal == 0) continue; // AIR is the default — skip for speed
-            int x = i / (SIZE * SIZE);
-            int y = (i % (SIZE * SIZE)) / SIZE;
-            int z = i % SIZE;
-            chunk.setBlock(x, y, z, BLOCK_VALUES[ordinal]);
+        ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
+        for (int i = 0; i < VOLUME; i++) {
+            // readShort() reads signed; & 0xFFFF gives unsigned ID value
+            int id = buf.getShort() & 0xFFFF;
+            if (id != 0) { // skip AIR (id 0) — array is already all zeros
+                // Reconstruct x, y, z from flat index i = x*SIZE*SIZE + y*SIZE + z
+                int x =  i / (SIZE * SIZE);
+                int y = (i / SIZE) % SIZE;
+                int z =  i % SIZE;
+                chunk.setBlock(x, y, z, BlockRegistry.getById(id));
+            }
         }
         return chunk;
     }

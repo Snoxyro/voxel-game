@@ -1,7 +1,8 @@
 package com.voxelgame.game;
 
-import com.voxelgame.common.world.Block;
 import com.voxelgame.common.world.BlockView;
+import com.voxelgame.common.world.BlockType;
+import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
 
@@ -161,17 +162,17 @@ public class World implements BlockView {
 
     /**
      * Returns the block at the given world-space coordinates.
-     * Returns {@link Block#AIR} for unloaded chunks.
+    * Returns {@link Blocks#AIR} for unloaded chunks.
      *
      * {@inheritDoc}
      */
     @Override
-    public Block getBlock(int worldX, int worldY, int worldZ) {
+    public BlockType getBlock(int worldX, int worldY, int worldZ) {
         int cx = Math.floorDiv(worldX, Chunk.SIZE);
         int cy = Math.floorDiv(worldY, Chunk.SIZE);
         int cz = Math.floorDiv(worldZ, Chunk.SIZE);
         Chunk chunk = chunks.get(new ChunkPos(cx, cy, cz));
-        if (chunk == null) return Block.AIR;
+        if (chunk == null) return Blocks.AIR;
         return chunk.getBlock(
             Math.floorMod(worldX, Chunk.SIZE),
             Math.floorMod(worldY, Chunk.SIZE),
@@ -191,9 +192,9 @@ public class World implements BlockView {
      * @param worldX world-space X
      * @param worldY world-space Y
      * @param worldZ world-space Z
-     * @param block  block type to place ({@link Block#AIR} to remove)
+     * @param type   block type to place ({@link Blocks#AIR} to remove)
      */
-    public void setBlock(int worldX, int worldY, int worldZ, Block block) {
+    public void setBlock(int worldX, int worldY, int worldZ, BlockType type) {
         int cx = Math.floorDiv(worldX, Chunk.SIZE);
         int cy = Math.floorDiv(worldY, Chunk.SIZE);
         int cz = Math.floorDiv(worldZ, Chunk.SIZE);
@@ -204,7 +205,7 @@ public class World implements BlockView {
             Math.floorMod(worldX, Chunk.SIZE),
             Math.floorMod(worldY, Chunk.SIZE),
             Math.floorMod(worldZ, Chunk.SIZE),
-            block
+            type
         );
         // Mark modified — will be flushed to disk at end of current tick
         dirtyChunks.add(new ChunkPos(cx, cy, cz));

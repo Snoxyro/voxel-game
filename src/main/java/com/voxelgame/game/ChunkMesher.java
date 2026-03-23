@@ -1,6 +1,8 @@
 package com.voxelgame.game;
 
-import com.voxelgame.common.world.Block;
+import com.voxelgame.common.world.BlockRegistry;
+import com.voxelgame.common.world.BlockType;
+import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
 import java.util.Arrays;
@@ -268,12 +270,12 @@ public class ChunkMesher {
         for (int y = minY; y <= maxY; y++) {
             for (int z = 0; z < Chunk.SIZE; z++) {
                 for (int x = 0; x < Chunk.SIZE; x++) {
-                    Block b = chunk.getBlock(x, y, z);
-                    if (b == Block.AIR || !isAirAt(chunk, pos, neighbors, x, y + 1, z)) {
+                    BlockType b = chunk.getBlock(x, y, z);
+                    if (b == Blocks.AIR || !isAirAt(chunk, pos, neighbors, x, y + 1, z)) {
                         mask[z][x] = 0;
                         continue;
                     }
-                    mask[z][x] = packMask(b.ordinal() + 1,
+                    mask[z][x] = packMask(b.getId(),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_TOP, 0),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_TOP, 1),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_TOP, 2),
@@ -285,7 +287,7 @@ public class ChunkMesher {
                 int i = quads[qi], j = quads[qi+1];
                 int w = quads[qi+2];
                 int h = quads[qi+3];
-                Block blk = Block.values()[quads[qi+4] - 1];
+                BlockType blk = BlockRegistry.getById(quads[qi+4]);
                 // Textures provide color — vertex color carries only brightness (AO + directional shade).
                 float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
                 buf = ensureCapacity(buf, size, 54);
@@ -309,12 +311,12 @@ public class ChunkMesher {
         for (int y = minY; y <= maxY; y++) {
             for (int z = 0; z < Chunk.SIZE; z++) {
                 for (int x = 0; x < Chunk.SIZE; x++) {
-                    Block b = chunk.getBlock(x, y, z);
-                    if (b == Block.AIR || !isAirAt(chunk, pos, neighbors, x, y - 1, z)) {
+                    BlockType b = chunk.getBlock(x, y, z);
+                    if (b == Blocks.AIR || !isAirAt(chunk, pos, neighbors, x, y - 1, z)) {
                         mask[z][x] = 0;
                         continue;
                     }
-                    mask[z][x] = packMask(b.ordinal() + 1,
+                    mask[z][x] = packMask(b.getId(),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_BOTTOM, 0),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_BOTTOM, 1),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_BOTTOM, 2),
@@ -326,7 +328,7 @@ public class ChunkMesher {
                 int i = quads[qi], j = quads[qi+1];
                 int w = quads[qi+2];
                 int h = quads[qi+3];
-                Block blk = Block.values()[quads[qi+4] - 1];
+                BlockType blk = BlockRegistry.getById(quads[qi+4]);
                 // Textures provide color — vertex color carries only brightness (AO + directional shade).
                 float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
                 buf = ensureCapacity(buf, size, 54);
@@ -351,12 +353,12 @@ public class ChunkMesher {
             for (int y = 0; y < Chunk.SIZE; y++) {
                 if (y < minY || y > maxY) { Arrays.fill(mask[y], 0); continue; }
                 for (int x = 0; x < Chunk.SIZE; x++) {
-                    Block b = chunk.getBlock(x, y, z);
-                    if (b == Block.AIR || !isAirAt(chunk, pos, neighbors, x, y, z - 1)) {
+                    BlockType b = chunk.getBlock(x, y, z);
+                    if (b == Blocks.AIR || !isAirAt(chunk, pos, neighbors, x, y, z - 1)) {
                         mask[y][x] = 0;
                         continue;
                     }
-                    mask[y][x] = packMask(b.ordinal() + 1,
+                    mask[y][x] = packMask(b.getId(),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_NORTH, 0),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_NORTH, 1),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_NORTH, 2),
@@ -368,7 +370,7 @@ public class ChunkMesher {
                 int i = quads[qi], j = quads[qi+1];
                 int w = quads[qi+2];
                 int h = quads[qi+3];
-                Block blk = Block.values()[quads[qi+4] - 1];
+                BlockType blk = BlockRegistry.getById(quads[qi+4]);
                 // Textures provide color — vertex color carries only brightness (AO + directional shade).
                 float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
                 buf = ensureCapacity(buf, size, 54);
@@ -393,12 +395,12 @@ public class ChunkMesher {
             for (int y = 0; y < Chunk.SIZE; y++) {
                 if (y < minY || y > maxY) { Arrays.fill(mask[y], 0); continue; }
                 for (int x = 0; x < Chunk.SIZE; x++) {
-                    Block b = chunk.getBlock(x, y, z);
-                    if (b == Block.AIR || !isAirAt(chunk, pos, neighbors, x, y, z + 1)) {
+                    BlockType b = chunk.getBlock(x, y, z);
+                    if (b == Blocks.AIR || !isAirAt(chunk, pos, neighbors, x, y, z + 1)) {
                         mask[y][x] = 0;
                         continue;
                     }
-                    mask[y][x] = packMask(b.ordinal() + 1,
+                    mask[y][x] = packMask(b.getId(),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_SOUTH, 0),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_SOUTH, 1),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_SOUTH, 2),
@@ -410,7 +412,7 @@ public class ChunkMesher {
                 int i = quads[qi], j = quads[qi+1];
                 int w = quads[qi+2];
                 int h = quads[qi+3];
-                Block blk = Block.values()[quads[qi+4] - 1];
+                BlockType blk = BlockRegistry.getById(quads[qi+4]);
                 // Textures provide color — vertex color carries only brightness (AO + directional shade).
                 float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
                 buf = ensureCapacity(buf, size, 54);
@@ -435,12 +437,12 @@ public class ChunkMesher {
             for (int y = 0; y < Chunk.SIZE; y++) {
                 if (y < minY || y > maxY) { Arrays.fill(mask[y], 0); continue; }
                 for (int z = 0; z < Chunk.SIZE; z++) {
-                    Block b = chunk.getBlock(x, y, z);
-                    if (b == Block.AIR || !isAirAt(chunk, pos, neighbors, x + 1, y, z)) {
+                    BlockType b = chunk.getBlock(x, y, z);
+                    if (b == Blocks.AIR || !isAirAt(chunk, pos, neighbors, x + 1, y, z)) {
                         mask[y][z] = 0;
                         continue;
                     }
-                    mask[y][z] = packMask(b.ordinal() + 1,
+                    mask[y][z] = packMask(b.getId(),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_EAST, 0),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_EAST, 1),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_EAST, 2),
@@ -452,7 +454,7 @@ public class ChunkMesher {
                 int i = quads[qi], j = quads[qi+1];
                 int w = quads[qi+2];
                 int h = quads[qi+3];
-                Block blk = Block.values()[quads[qi+4] - 1];
+                BlockType blk = BlockRegistry.getById(quads[qi+4]);
                 // Textures provide color — vertex color carries only brightness (AO + directional shade).
                 float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
                 buf = ensureCapacity(buf, size, 54);
@@ -477,12 +479,12 @@ public class ChunkMesher {
             for (int y = 0; y < Chunk.SIZE; y++) {
                 if (y < minY || y > maxY) { Arrays.fill(mask[y], 0); continue; }
                 for (int z = 0; z < Chunk.SIZE; z++) {
-                    Block b = chunk.getBlock(x, y, z);
-                    if (b == Block.AIR || !isAirAt(chunk, pos, neighbors, x - 1, y, z)) {
+                    BlockType b = chunk.getBlock(x, y, z);
+                    if (b == Blocks.AIR || !isAirAt(chunk, pos, neighbors, x - 1, y, z)) {
                         mask[y][z] = 0;
                         continue;
                     }
-                    mask[y][z] = packMask(b.ordinal() + 1,
+                    mask[y][z] = packMask(b.getId(),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_WEST, 0),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_WEST, 1),
                         computeAO(chunk, pos, neighbors, x, y, z, FACE_WEST, 2),
@@ -494,7 +496,7 @@ public class ChunkMesher {
                 int i = quads[qi], j = quads[qi+1];
                 int w = quads[qi+2];
                 int h = quads[qi+3];
-                Block blk = Block.values()[quads[qi+4] - 1];
+                BlockType blk = BlockRegistry.getById(quads[qi+4]);
                 // Textures provide color — vertex color carries only brightness (AO + directional shade).
                 float[] color = new float[]{ 1.0f, 1.0f, 1.0f };
                 buf = ensureCapacity(buf, size, 54);
@@ -549,20 +551,31 @@ public class ChunkMesher {
     }
 
     /**
-     * Packs block type and four per-vertex AO values into a single int for use
-     * as a mask cell value. Two cells with identical packed values will be greedily
-     * merged — this naturally enforces that AO must match across merged faces.
+     * Packs block registry ID and four per-vertex AO values into a single int for
+     * use as a mask cell value. Two cells with identical packed values merge greedily —
+     * this enforces that both block type and AO must match across merged faces.
      *
      * <pre>
-     *   bits 0–2:   block type (ordinal + 1; 0 = empty face)
-     *   bits 3–4:   AO vertex 0 (0–3)
-     *   bits 5–6:   AO vertex 1 (0–3)
-     *   bits 7–8:   AO vertex 2 (0–3)
-     *   bits 9–10:  AO vertex 3 (0–3)
+     *   bits 0–16:  blockId + 1  (0 = empty face; 1–65536 = registered types)
+     *   bits 17–18: AO vertex 0  (0–3)
+     *   bits 19–20: AO vertex 1  (0–3)
+     *   bits 21–22: AO vertex 2  (0–3)
+     *   bits 23–24: AO vertex 3  (0–3)
      * </pre>
+     *
+     * <p>Adding 1 to {@code blockId} before storing means 0 unambiguously means "no face
+     * here", even for block ID 0 (AIR is never packed because we skip it before calling
+     * this method — the +1 is a defensive extra guarantee).
+     *
+     * @param blockId registry ID of the block ({@link BlockType#getId()})
+     * @param ao0     AO at vertex 0 (0–3)
+     * @param ao1     AO at vertex 1
+     * @param ao2     AO at vertex 2
+     * @param ao3     AO at vertex 3
+     * @return packed int mask value
      */
-    private static int packMask(int blockType, int ao0, int ao1, int ao2, int ao3) {
-        return blockType | (ao0 << 3) | (ao1 << 5) | (ao2 << 7) | (ao3 << 9);
+    private static int packMask(int blockId, int ao0, int ao1, int ao2, int ao3) {
+        return (blockId + 1) | (ao0 << 17) | (ao1 << 19) | (ao2 << 21) | (ao3 << 23);
     }
 
     // -------------------------------------------------------------------------
@@ -610,11 +623,11 @@ public class ChunkMesher {
                 result[count++] = j;
                 result[count++] = w;
                 result[count++] = h;
-                result[count++] = packed & 0x7;          // block type (bits 0-2)
-                result[count++] = (packed >>  3) & 0x3;  // ao0 (bits 3-4)
-                result[count++] = (packed >>  5) & 0x3;  // ao1 (bits 5-6)
-                result[count++] = (packed >>  7) & 0x3;  // ao2 (bits 7-8)
-                result[count++] = (packed >>  9) & 0x3;  // ao3 (bits 9-10)
+                result[count++] = (packed & 0x1FFFF) - 1; // block registry ID (bits 0-16, minus the +1 offset)
+                result[count++] = (packed >> 17) & 0x3;   // ao0 (bits 17-18)
+                result[count++] = (packed >> 19) & 0x3;   // ao1 (bits 19-20)
+                result[count++] = (packed >> 21) & 0x3;   // ao2 (bits 21-22)
+                result[count++] = (packed >> 23) & 0x3;   // ao3 (bits 23-24)
 
                 // Mark the merged rectangle as consumed
                 for (int dj = 0; dj < h; dj++)
@@ -661,7 +674,7 @@ public class ChunkMesher {
         if (lx >= 0 && lx < Chunk.SIZE
          && ly >= 0 && ly < Chunk.SIZE
          && lz >= 0 && lz < Chunk.SIZE) {
-            return chunk.isAir(lx, ly, lz);
+            return chunk.getBlock(lx, ly, lz) == Blocks.AIR;
         }
 
         int worldX = pos.worldX() + lx;
@@ -675,11 +688,11 @@ public class ChunkMesher {
         ));
         if (neighbor == null) return true;
 
-        return neighbor.isAir(
+        return neighbor.getBlock(
             Math.floorMod(worldX, Chunk.SIZE),
             Math.floorMod(worldY, Chunk.SIZE),
             Math.floorMod(worldZ, Chunk.SIZE)
-        );
+        ) == Blocks.AIR;
     }
 
     /**

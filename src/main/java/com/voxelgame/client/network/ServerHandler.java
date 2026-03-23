@@ -55,7 +55,7 @@ public class ServerHandler extends SimpleChannelInboundHandler<Packet> {
         } else if (msg instanceof UnloadChunkPacket p) {
             handleUnloadChunk(p);
         } else if (msg instanceof BlockChangePacket p) {
-            clientWorld.queueBlockChange(p.worldX(), p.worldY(), p.worldZ(), p.blockOrdinal());
+            clientWorld.queueBlockChange(p.worldX(), p.worldY(), p.worldZ(), p.blockId());
         } else if (msg instanceof PlayerSpawnPacket p) {
             clientWorld.queueRemotePlayerSpawn(p.playerId(), p.username(), p.x(), p.y(), p.z());
         } else if (msg instanceof PlayerMoveCBPacket p) {

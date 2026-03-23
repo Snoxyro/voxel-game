@@ -1,7 +1,8 @@
 package com.voxelgame.engine;
 
 import com.voxelgame.client.ClientWorld;
-import com.voxelgame.common.world.Block;
+import com.voxelgame.common.world.BlockType;
+import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.RayCaster;
 import com.voxelgame.common.world.RaycastResult;
 import com.voxelgame.game.Player;
@@ -49,8 +50,8 @@ public class GameLoop {
     private BlockHighlightRenderer blockHighlight;
     private HudRenderer            hudRenderer;
 
-    private RaycastResult lastRaycast  = RaycastResult.miss();
-    private Block         selectedBlock = Block.DIRT;
+    private RaycastResult lastRaycast   = RaycastResult.miss();
+    private BlockType     selectedBlock = Blocks.DIRT;
     private boolean       cursorCaptured = true;
     private boolean       freecam        = false;
     private int           lastFbWidth;
@@ -260,9 +261,9 @@ public class GameLoop {
         ));
 
         // --- Block type selection ---
-        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_1)) selectedBlock = Block.GRASS;
-        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_2)) selectedBlock = Block.DIRT;
-        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_3)) selectedBlock = Block.STONE;
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_1)) selectedBlock = Blocks.GRASS;
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_2)) selectedBlock = Blocks.DIRT;
+        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_3)) selectedBlock = Blocks.STONE;
 
         // --- Raycast (for block highlight only — interaction wired in Phase 5C) ---
         float pitchRad = (float) Math.toRadians(camera.getPitch());
@@ -287,7 +288,7 @@ public class GameLoop {
                 int px = lastRaycast.placeX(), py = lastRaycast.placeY(), pz = lastRaycast.placeZ();
                 if (freecam || !player.getBody().overlapsBlock(px, py, pz)) {
                     serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockPlacePacket(
-                        px, py, pz, selectedBlock.ordinal()));
+                        px, py, pz, selectedBlock.getId()));
                 }
             }
         }

@@ -21,13 +21,13 @@ public class RayCaster {
 
     /**
      * Casts a ray and returns the first non-air block hit within
-     * {@code maxDistance} blocks.
+     * {@code maxDistance} blocks (a hit is any block that is not {@link Blocks#AIR}).
      *
      * @param origin      ray start position (typically the camera position)
      * @param direction   normalised look direction
      * @param world       the world to query for block solidity
      * @param maxDistance maximum ray length in blocks
-     * @return a hit result, or {@link RaycastResult#miss()} if nothing was found
+    * @return a hit result, or {@link RaycastResult#miss()} if nothing was found
      */
     public static RaycastResult cast(Vector3f origin, Vector3f direction, BlockView world, float maxDistance){
 
@@ -84,7 +84,7 @@ public class RayCaster {
             }
 
             // Check the voxel we just entered
-            if (world.getBlock(x, y, z) != Block.AIR) {
+            if (world.getBlock(x, y, z) != Blocks.AIR) {
                 return new RaycastResult(true, x, y, z, faceNX, faceNY, faceNZ);
             }
         }

@@ -1,7 +1,9 @@
 package com.voxelgame.client;
 
-import com.voxelgame.common.world.Block;
 import com.voxelgame.common.world.BlockView;
+import com.voxelgame.common.world.BlockRegistry;
+import com.voxelgame.common.world.BlockType;
+import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
 import com.voxelgame.engine.Mesh;
@@ -101,7 +103,7 @@ public class ClientWorld implements BlockView {
     private record PendingMesh(ChunkPos pos, float[] vertices) {}
 
     /** Carrier for a server-authoritative block change. Applied on the main thread. */
-    private record PendingBlockChange(int worldX, int worldY, int worldZ, int blockOrdinal) {}
+    private record PendingBlockChange(int worldX, int worldY, int worldZ, int blockId) {}
 
     /**
      * Initializes GL-dependent resources. Must be called on the main thread after
@@ -136,7 +138,7 @@ public class ClientWorld implements BlockView {
      * @param cx        chunk-grid X
      * @param cy        chunk-grid Y
      * @param cz        chunk-grid Z
-     * @param blockData 4096 raw bytes from the server's chunk block array
+     * @param blockData Chunk.SERIALIZED_SIZE raw bytes from the server's chunk block array
      */
     public void queueChunkData(int cx, int cy, int cz, byte[] blockData) {
         Chunk chunk = Chunk.fromBytes(blockData);
@@ -150,10 +152,10 @@ public class ClientWorld implements BlockView {
      * @param worldX     world-space X
      * @param worldY     world-space Y
      * @param worldZ     world-space Z
-     * @param blockOrdinal block ordinal (0 = AIR)
+     * @param blockId block registry ID (0 = AIR)
      */
-    public void queueBlockChange(int worldX, int worldY, int worldZ, int blockOrdinal) {
-        pendingBlockChanges.offer(new PendingBlockChange(worldX, worldY, worldZ, blockOrdinal));
+    public void queueBlockChange(int worldX, int worldY, int worldZ, int blockId) {
+        pendingBlockChanges.offer(new PendingBlockChange(worldX, worldY, worldZ, blockId));
     }
 
     /**
@@ -260,7 +262,7 @@ public class ClientWorld implements BlockView {
     private void drainPendingBlockChanges() {
         PendingBlockChange change;
         while ((change = pendingBlockChanges.poll()) != null) {
-            Block block = Block.values()[change.blockOrdinal()];
+            BlockType block = BlockRegistry.getById(change.blockId());
 
             int cx = Math.floorDiv(change.worldX(), Chunk.SIZE);
             int cy = Math.floorDiv(change.worldY(), Chunk.SIZE);
@@ -401,15 +403,15 @@ public class ClientWorld implements BlockView {
 
     /**
      * {@inheritDoc}
-     * Returns {@link Block#AIR} for chunks that haven't arrived from the server yet.
+     * Returns {@link Blocks#AIR} for chunks that haven't arrived from the server yet.
      */
     @Override
-    public Block getBlock(int worldX, int worldY, int worldZ) {
+    public BlockType getBlock(int worldX, int worldY, int worldZ) {
         int cx = Math.floorDiv(worldX, Chunk.SIZE);
         int cy = Math.floorDiv(worldY, Chunk.SIZE);
         int cz = Math.floorDiv(worldZ, Chunk.SIZE);
         Chunk chunk = chunks.get(new ChunkPos(cx, cy, cz));
-        if (chunk == null) return Block.AIR;
+        if (chunk == null) return Blocks.AIR;
         return chunk.getBlock(
             Math.floorMod(worldX, Chunk.SIZE),
             Math.floorMod(worldY, Chunk.SIZE),

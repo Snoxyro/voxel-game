@@ -2,6 +2,7 @@ package com.voxelgame;
 
 import com.voxelgame.client.ClientWorld;
 import com.voxelgame.client.network.ClientNetworkManager;
+import com.voxelgame.common.world.Blocks;
 import com.voxelgame.engine.GameLoop;
 import com.voxelgame.server.GameServer;
 
@@ -17,6 +18,8 @@ import com.voxelgame.server.GameServer;
 public class Main {
 
     public static void main(String[] args) throws Exception {
+        Blocks.bootstrap();
+
         // --- Parse CLI args ---
         String username = "Player";
         for (int i = 0; i < args.length - 1; i++) {

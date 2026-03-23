@@ -1,7 +1,10 @@
 package com.voxelgame.server;
 
+import com.voxelgame.common.network.packets.BlockChangePacket;
 import com.voxelgame.common.network.packets.ChunkDataPacket;
 import com.voxelgame.common.network.packets.UnloadChunkPacket;
+import com.voxelgame.common.world.BlockType;
+import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
 import com.voxelgame.game.ChunkStorage;
@@ -204,8 +207,8 @@ public class ServerWorld {
      */
     public void applyBlockBreak(int worldX, int worldY, int worldZ) {
         // Server-side validation goes here in Phase 5D (range check, permissions, etc.)
-        world.setBlock(worldX, worldY, worldZ, com.voxelgame.common.world.Block.AIR);
-        broadcastBlockChange(worldX, worldY, worldZ, 0); // 0 = AIR ordinal
+        world.setBlock(worldX, worldY, worldZ, Blocks.AIR);
+        broadcastBlockChange(worldX, worldY, worldZ, Blocks.AIR);
     }
 
     /**
@@ -215,13 +218,12 @@ public class ServerWorld {
      * @param worldX      world-space X of the placed block
      * @param worldY      world-space Y
      * @param worldZ      world-space Z
-     * @param blockOrdinal Block.ordinal() of the placed type
+     * @param blockType placed block type
      */
-    public void applyBlockPlace(int worldX, int worldY, int worldZ, int blockOrdinal) {
-        com.voxelgame.common.world.Block[] blocks = com.voxelgame.common.world.Block.values();
-        if (blockOrdinal <= 0 || blockOrdinal >= blocks.length) return; // reject invalid/AIR place
-        world.setBlock(worldX, worldY, worldZ, blocks[blockOrdinal]);
-        broadcastBlockChange(worldX, worldY, worldZ, blockOrdinal);
+    public void applyBlockPlace(int worldX, int worldY, int worldZ, BlockType blockType) {
+        if (blockType == Blocks.AIR) return; // reject AIR place
+        world.setBlock(worldX, worldY, worldZ, blockType);
+        broadcastBlockChange(worldX, worldY, worldZ, blockType);
     }
 
     /**
@@ -229,14 +231,13 @@ public class ServerWorld {
      * Players without the chunk don't need the update — they'll receive correct data
      * when the chunk streams to them later.
      */
-    private void broadcastBlockChange(int worldX, int worldY, int worldZ, int blockOrdinal) {
+    private void broadcastBlockChange(int worldX, int worldY, int worldZ, BlockType blockType) {
         ChunkPos affected = new ChunkPos(
             Math.floorDiv(worldX, com.voxelgame.common.world.Chunk.SIZE),
             Math.floorDiv(worldY, com.voxelgame.common.world.Chunk.SIZE),
             Math.floorDiv(worldZ, com.voxelgame.common.world.Chunk.SIZE)
         );
-        com.voxelgame.common.network.packets.BlockChangePacket packet =
-            new com.voxelgame.common.network.packets.BlockChangePacket(worldX, worldY, worldZ, blockOrdinal);
+        BlockChangePacket packet = new BlockChangePacket(worldX, worldY, worldZ, blockType.getId());
 
         for (PlayerSession player : players) {
             if (player.hasChunk(affected)) {

@@ -38,8 +38,8 @@ public class PacketDecoder extends MessageToMessageDecoder<ByteBuf> {
 
             case CHUNK_DATA -> {
                 int cx = in.readInt(), cy = in.readInt(), cz = in.readInt();
-                // Read exactly Chunk.VOLUME bytes — the raw block ordinal array
-                byte[] data = new byte[Chunk.SIZE * Chunk.SIZE * Chunk.SIZE];
+                // Read exactly Chunk.SERIALIZED_SIZE bytes (8192 — 2 bytes per block)
+                byte[] data = new byte[Chunk.SERIALIZED_SIZE];
                 in.readBytes(data);
                 yield new ChunkDataPacket(cx, cy, cz, data);
             }

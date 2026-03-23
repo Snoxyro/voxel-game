@@ -150,7 +150,8 @@ public class PhysicsBody {
         for (int bx = bMinX; bx <= bMaxX; bx++) {
             for (int by = bMinY; by <= bMaxY; by++) {
                 for (int bz = bMinZ; bz <= bMaxZ; bz++) {
-                    if (world.getBlock(bx, by, bz) == Block.AIR) continue;
+                    BlockType blockType = world.getBlock(bx, by, bz);
+                    if (blockType == Blocks.AIR) continue;
 
                     // Snap the body to the block face it entered on this axis.
                     // After snapping, recalculate AABB bounds so later iterations

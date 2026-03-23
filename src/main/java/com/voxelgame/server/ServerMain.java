@@ -1,5 +1,7 @@
 package com.voxelgame.server;
 
+import com.voxelgame.common.world.Blocks;
+
 import java.nio.file.Path;
 
 /**
@@ -22,6 +24,8 @@ import java.nio.file.Path;
 public class ServerMain {
 
     public static void main(String[] args) {
+        Blocks.bootstrap();
+
         // --- Parse CLI args ---
         String worldName = "default";
         int    port      = GameServer.PORT;

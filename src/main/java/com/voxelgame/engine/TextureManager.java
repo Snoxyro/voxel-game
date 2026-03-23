@@ -6,6 +6,8 @@ import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.system.MemoryUtil;
 
+import com.voxelgame.common.world.TextureLayers;
+
 import java.nio.ByteBuffer;
 
 /**
@@ -35,14 +37,15 @@ public class TextureManager {
     /** Edge size of each tile in pixels. All tiles are square. */
     public static final int TILE_SIZE = 16;
 
-    // Layer index constants — each maps to one 16×16 tile in the texture array.
-    // Add new entries here when new block types are introduced.
-    public static final int LAYER_GRASS_TOP  = 0;
-    public static final int LAYER_GRASS_SIDE = 1;
-    public static final int LAYER_DIRT       = 2;
-    public static final int LAYER_STONE      = 3;
+    // Layer index constants — defined in TextureLayers (common/world/) so that
+    // BlockType can reference them without importing engine/. TextureManager
+    // simply re-exports them here for code that already imports TextureManager.
+    public static final int LAYER_GRASS_TOP  = TextureLayers.LAYER_GRASS_TOP;
+    public static final int LAYER_GRASS_SIDE = TextureLayers.LAYER_GRASS_SIDE;
+    public static final int LAYER_DIRT       = TextureLayers.LAYER_DIRT;
+    public static final int LAYER_STONE      = TextureLayers.LAYER_STONE;
 
-    private static final int LAYER_COUNT = 4;
+    private static final int LAYER_COUNT = TextureLayers.COUNT;
 
     /** OpenGL handle to the GL_TEXTURE_2D_ARRAY. */
     private int textureArrayId;

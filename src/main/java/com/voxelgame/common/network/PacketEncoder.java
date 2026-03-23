@@ -47,7 +47,7 @@ public class PacketEncoder extends MessageToByteEncoder<Packet> {
             out.writeInt(p.cx());
             out.writeInt(p.cy());
             out.writeInt(p.cz());
-            // 4096 bytes — the raw flat block array from Chunk.toBytes()
+            // Chunk.SERIALIZED_SIZE bytes (8192 — 2 bytes per block, big-endian short registry IDs)
             out.writeBytes(p.blockData());
 
         } else if (msg instanceof UnloadChunkPacket p) {
@@ -67,7 +67,7 @@ public class PacketEncoder extends MessageToByteEncoder<Packet> {
             out.writeInt(p.worldX());
             out.writeInt(p.worldY());
             out.writeInt(p.worldZ());
-            out.writeInt(p.blockOrdinal());
+            out.writeInt(p.blockId());
 
         } else if (msg instanceof PlayerMoveSBPacket p) {
             out.writeByte(PacketId.PLAYER_MOVE_SB.id);
@@ -82,7 +82,7 @@ public class PacketEncoder extends MessageToByteEncoder<Packet> {
             out.writeInt(p.worldX());
             out.writeInt(p.worldY());
             out.writeInt(p.worldZ());
-            out.writeInt(p.blockOrdinal());
+            out.writeInt(p.blockId());
 
         } else if (msg instanceof PlayerSpawnPacket p) {
             out.writeByte(PacketId.PLAYER_SPAWN.id);
