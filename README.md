@@ -126,8 +126,15 @@ decisions, and lessons learned — including honest notes on AI assistance.
   - [x] 5E — World persistence (ChunkStorage, dirty tracking, GZIP files)
   - [x] 5F — CLI args, world.dat seed file, configurable launch
 - [ ] Phase 6 — Foundation for extensibility
-  - [ ] 6A — Block Registry (Block enum → registered class, ID-stable saves)
-  - [ ] 6B — Menu / UI System (main menu, world select, multiplayer connect)
+  - [x] 6A — Block Registry (Block enum → registered class, ID-stable saves)
+  - [ ] 6B — Menu / UI System
+    - [x] 6B-1 — UI rendering foundation (GlyphAtlas, UiShader, UiRenderer)
+    - [x] 6B-2 — Screen abstraction (Screen, ScreenManager, GameLoop wiring)
+    - [x] 6B-3 — Main menu (Singleplayer / Multiplayer stub / Quit)
+    - [ ] 6B-4 — World selection screen
+    - [ ] 6B-5 — Multiplayer connect screen
+    - [ ] 6B-6 — In-game pause menu
+    - [ ] 6B-7 — Settings stub
   - [ ] 6C — Lighting + Day/Night Cycle
   - [ ] 6D — Entity System + Player Model
   - [ ] 6E — Items + Inventory

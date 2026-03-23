@@ -34,8 +34,10 @@ com.voxelgame.
 │   ├── ClientWorld.java       ← receives chunks from server, meshes + renders
 │   └── network/               ← ClientNetworkManager, ServerHandler
 ├── engine/                    ← GL/GLFW systems — client main thread only
+│   ├── ui/                    ← UI rendering: GlyphAtlas, UiShader, UiRenderer
 │   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, etc.
 └── game/                      ← server-side gameplay
+│   ├── screen/                ← Screen interface, ScreenManager, all screen implementat
     └── World (chunk data + persistence), TerrainGenerator, ChunkMesher,
         Player, ChunkStorage (interface)
 ```
@@ -95,7 +97,7 @@ capture a snapshot before handing work to a background thread.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 6 — Foundation for extensibility. Sub-phase 6A next.
+Phase 6 — Foundation for extensibility. Sub-phase 6B in progress (6B-1/2/3 done).
 
 ### Phase 5 complete
 - 5A done: package restructure, Netty, handshake/login
@@ -128,6 +130,12 @@ Deferred until registries, UI, lighting, and entities all exist as stable founda
 - `BlockView` interface must remain the abstraction for physics/raycasting
 - Netty I/O threads must only write to concurrent queues — never touch GL or chunk maps
 - Default port: 24463
+- UI render pass must call `glDisable(GL_CULL_FACE)` in `begin()` and restore it
+  in `end()` — UI quads are wound CW in screen-space and are culled as back faces
+  otherwise. `UiRenderer` already does this. Never remove those two calls.
+- Full-screen menus replace world render. Overlay screens (pause, inventory, hotbar)
+  run after `render()` in the same frame — `GameLoop.loop()` branches on a future
+  `isOverlay()` flag on `Screen`.
 
 ## What NOT to Do
 - Do not suggest switching to Maven

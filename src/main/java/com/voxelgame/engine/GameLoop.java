@@ -6,8 +6,14 @@ import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.RayCaster;
 import com.voxelgame.common.world.RaycastResult;
 import com.voxelgame.game.Player;
+import com.voxelgame.game.screen.MainMenuScreen;
+import com.voxelgame.game.screen.ScreenManager;
+
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.glfw.GLFWCharCallback;
+import org.lwjgl.glfw.GLFWKeyCallback;
+import org.lwjgl.glfw.GLFWMouseButtonCallback;
 import org.lwjgl.opengl.GL11;
 
 /**
@@ -58,6 +64,14 @@ public class GameLoop {
     private int           lastFbHeight;
     private boolean       lastFKeyDown   = false;
     private int[]         lastRenderStats = { 0, 0 };
+    private ScreenManager screenManager;
+
+    // GLFW event callbacks — must be stored as fields to prevent garbage collection.
+    // LWJGL registers these with native GLFW; if the JVM GC collects them, the
+    // next native callback fires into freed memory and the JVM crashes.
+    private GLFWKeyCallback         keyCallback;
+    private GLFWMouseButtonCallback mouseButtonCallback;
+    private GLFWCharCallback        charCallback;
 
     /**
      * Creates a GameLoop.
@@ -101,6 +115,10 @@ public class GameLoop {
         inputHandler = new InputHandler(window.getWindowHandle());
         inputHandler.init();
 
+        // Release cursor immediately — main menu needs a free mouse.
+        cursorCaptured = false;
+        GLFW.glfwSetInputMode(window.getWindowHandle(), GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+
         player = new Player(SPAWN_X, SPAWN_Y, SPAWN_Z);
 
         shaderProgram  = new ShaderProgram("/shaders/default.vert", "/shaders/default.frag");
@@ -113,10 +131,57 @@ public class GameLoop {
         blockHighlight = new BlockHighlightRenderer();
         hudRenderer    = new HudRenderer();
 
+        screenManager = new ScreenManager();
+
+        // Forward key press events to the active screen.
+        // Note: this callback does NOT fire when no screen is active — game input
+        // still uses InputHandler polling (isKeyDown, wasMouseLeftClicked, etc.)
+        keyCallback = GLFWKeyCallback.create((win, key, scancode, action, mods) -> {
+            if (action == GLFW.GLFW_PRESS) {
+                screenManager.onKeyPress(key, mods);
+            }
+        });
+        GLFW.glfwSetKeyCallback(window.getWindowHandle(), keyCallback);
+
+        // Forward mouse clicks to the active screen, including cursor position.
+        mouseButtonCallback = GLFWMouseButtonCallback.create((win, button, action, mods) -> {
+            if (action == GLFW.GLFW_PRESS && screenManager.hasActiveScreen()) {
+                double[] x = {0}, y = {0};
+                GLFW.glfwGetCursorPos(win, x, y);
+                screenManager.onMouseClick((int) x[0], (int) y[0], button);
+            }
+        });
+        GLFW.glfwSetMouseButtonCallback(window.getWindowHandle(), mouseButtonCallback);
+
+        // Forward printable character events to the active screen.
+        // glfwSetCharCallback fires only for printable characters with keyboard layout
+        // and modifier keys already applied — correct for text input fields.
+        charCallback = GLFWCharCallback.create((win, codepoint) -> {
+            screenManager.onCharTyped((char) codepoint);
+        });
+        GLFW.glfwSetCharCallback(window.getWindowHandle(), charCallback);
+
         window.setRefreshCallback(() -> {
-            render();
+            if (screenManager.hasActiveScreen()) {
+                GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+                screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+            } else {
+                render();
+            }
             window.swapBuffers();
         });
+
+        screenManager.setScreen(new MainMenuScreen(
+            screenManager,
+            // onEnterGame — recapture cursor and begin playing
+            () -> {
+                cursorCaptured = true;
+                GLFW.glfwSetInputMode(window.getWindowHandle(),
+                    GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+            },
+            // onQuit — close the window
+            () -> GLFW.glfwSetWindowShouldClose(window.getWindowHandle(), true)
+        ));
 
         System.out.println("Engine initialized.");
         System.out.println("Controls: WASD move | mouse look");
@@ -149,12 +214,21 @@ public class GameLoop {
             accumulator       += elapsed;
 
             while (accumulator >= updateInterval) {
-                update();
+                if (!screenManager.hasActiveScreen()) {
+                    update();
+                }
                 updates++;
                 accumulator -= updateInterval;
             }
 
-            render();
+            if (screenManager.hasActiveScreen()) {
+                // Screen is active — skip game world render entirely.
+                // Clear the framebuffer so the previous world frame doesn't bleed through.
+                GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+                screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+            } else {
+                render();
+            }
             frames++;
 
             if (System.currentTimeMillis() - diagnosticTimer >= 1000.0) {
@@ -328,6 +402,10 @@ public class GameLoop {
         textureManager.cleanup();
         clientWorld.cleanup();
         shaderProgram.cleanup();
+        screenManager.cleanup();
+        keyCallback.free();
+        mouseButtonCallback.free();
+        charCallback.free();
         window.cleanup();
         System.out.println("Engine shut down cleanly.");
     }

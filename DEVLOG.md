@@ -2190,6 +2190,82 @@ listeners. Has something meaningful to offer because the game underneath it is b
 
 ---
 
+## Entry 039 — Phase 6B: UI Foundation + Main Menu
+**Date:** 23.03.2026
+**Phase:** 6 — Foundation for extensibility
+
+### What Was Done
+- Created `src/main/resources/shaders/ui.vert` and `ui.frag` — orthographic 2D
+  shader pair. Vertex shader applies a `uProjection` ortho2D matrix (Y-down,
+  pixel-space). Fragment shader multiplies texture sample by per-vertex tint color.
+  Solid rects use a 1×1 white texture so the tint becomes the color directly.
+- Created `GlyphAtlas.java` in `engine/ui/` — bakes all printable ASCII (32–126)
+  into a single `GL_TEXTURE_2D` at startup using Java AWT. Monospaced font,
+  anti-aliasing off, white-on-transparent. Provides UV bounds and advance widths
+  per character.
+- Created `UiShader.java` in `engine/ui/` — thin wrapper around `ShaderProgram`
+  for the UI pass. `setProjection(w, h)` rebuilds the ortho matrix on resize.
+- Created `UiRenderer.java` in `engine/ui/` (Copilot) — batched quad renderer.
+  8 floats/vertex `[x,y,u,v,r,g,b,a]`, max 4096 quads/batch, pre-generated EBO.
+  `begin()`/`end()` bracket the UI pass and manage GL state.
+  `drawRect()` uses the 1×1 white texture. `drawText()` uses the glyph atlas.
+  Flushes automatically on texture switch or batch full.
+- Created `Screen.java` interface in `game/screen/` — `onShow()`, `onHide()`,
+  `render(UiRenderer, w, h)`, `onMouseClick()`, `onKeyPress()`, `onCharTyped()`.
+- Created `ScreenManager.java` in `game/screen/` — owns `UiShader`, `GlyphAtlas`,
+  `UiRenderer`. `setScreen()` calls `onHide()`/`onShow()`. `renderActiveScreen()`
+  calls `begin()`/`end()` around the active screen's `render()`. Input forwarding
+  returns true if consumed.
+- Created `MainMenuScreen.java` in `game/screen/` — three buttons: Singleplayer,
+  Multiplayer (stub), Quit. Dark panel centered on screen, yellow title, hover
+  highlight on buttons. Cursor position polled each frame for hover detection.
+- Updated `GameLoop.java` — added `ScreenManager` field; registered three GLFW
+  callbacks (key, mouse button, char) stored as fields to prevent GC; loop body
+  branches on `hasActiveScreen()` to skip update/world-render when a screen is
+  active; `cleanup()` frees callbacks and ScreenManager. Main menu shown at
+  startup with cursor released; Singleplayer recaptures cursor and dismisses menu.
+
+### Decisions Made
+- `GL_CULL_FACE` must be disabled in `UiRenderer.begin()` and restored in `end()`.
+  UI quads are wound clockwise in screen-space (Y-down), which OpenGL reads as
+  back faces under the default CCW front-face convention. The world render is
+  unaffected — cull face is always restored before the 3D pass runs.
+- `begin()`/`end()` is the correct pattern for any render pass that needs different
+  GL state. Each pass is fully self-contained — world render and UI render never
+  interfere with each other's state.
+- Full-screen menus (main menu) replace the world render entirely. Overlay screens
+  (pause menu, inventory) will run after `render()` in the same frame — a two-line
+  change in `GameLoop.loop()` deferred to when those screens are built (6B-6).
+- Three GLFW callbacks stored as fields on `GameLoop` — same GC hazard as the
+  framebuffer and refresh callbacks established in earlier phases.
+
+### Problems Encountered
+- `ShaderProgram.setUniform("uProjection", matrix)` — method name confirmed as
+  `setUniform`, not `setUniformMatrix4f`. Corrected in `UiShader.setProjection()`.
+- Shader resource not found — `UiShader` was passing `"shaders/ui.vert"` without
+  a leading `/`. Fixed to `"/shaders/ui.vert"` matching the existing convention.
+- Blank screen despite correct screen activation — root cause was `GL_CULL_FACE`
+  remaining enabled during the UI pass, culling all quads as back faces.
+
+### AI Assistance Notes
+- Claude wrote all files except `UiRenderer.java`.
+- Copilot generated `UiRenderer.java` from a structured prompt. Build succeeded
+  on first compile attempt.
+- The `GL_CULL_FACE` bug was diagnosed by Claude from the `UiRenderer` source after
+  the blank screen was confirmed as a render-pass state issue, not a data issue.
+
+### Lessons / Observations
+- Any render pass that changes GL state must restore it. The `begin()`/`end()`
+  pattern makes this explicit and auditable — it is not sufficient to set state
+  once at init and assume it holds.
+- UI quads wound in screen-space (Y-down) appear as back faces to OpenGL's default
+  CCW convention. Either disable `GL_CULL_FACE` for UI or reverse winding — disabling
+  is simpler and has no performance cost at this polygon count.
+- AWT glyph rendering gives workable results immediately with no font file dependency.
+  `GL_NEAREST` is essential — bilinear filtering blurs pixel-art-scale glyphs.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 
