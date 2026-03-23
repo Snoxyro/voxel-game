@@ -17,6 +17,12 @@ import com.voxelgame.server.GameServer;
 public class Main {
 
     public static void main(String[] args) throws Exception {
+        // --- Parse CLI args ---
+        String username = "Player";
+        for (int i = 0; i < args.length - 1; i++) {
+            if (args[i].equals("--username")) username = args[i + 1];
+        }
+
         // --- Shared ClientWorld ---
         // Created first so it can be passed to both the network layer (which writes
         // chunk data into it from the Netty I/O thread) and GameLoop (which reads
@@ -35,7 +41,7 @@ public class Main {
 
         // --- Connect client to embedded server ---
         ClientNetworkManager network = new ClientNetworkManager(
-            "localhost", GameServer.PORT, "Player", clientWorld
+            "localhost", GameServer.PORT, username, clientWorld
         );
         network.connect();
 

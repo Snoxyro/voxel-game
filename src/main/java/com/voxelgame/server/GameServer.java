@@ -2,6 +2,7 @@ package com.voxelgame.server;
 
 import com.voxelgame.server.network.ServerNetworkManager;
 import com.voxelgame.server.storage.FlatFileChunkStorage;
+import com.voxelgame.server.storage.WorldMeta;
 
 import io.netty.channel.Channel;
 
@@ -36,9 +37,6 @@ public class GameServer {
     /** Milliseconds per server tick. */
     private static final long TICK_INTERVAL_MS = 1000L / SERVER_TPS;
 
-    /** World seed used for terrain generation. Could become a world.dat value in Phase 5E. */
-    private static final long WORLD_SEED = 12345L;
-
     // Spawn coordinates — above the highest possible terrain surface.
     // MAX surface = BASE_HEIGHT(8) + HEIGHT_VARIATION(36) = 44 — 70 is safe.
     public static final float SPAWN_X = 64.0f;
@@ -58,21 +56,25 @@ public class GameServer {
     private final AtomicInteger nextPlayerId = new AtomicInteger(1);
 
     /**
-     * Creates a GameServer on the default port {@link #PORT}.
+     * Creates a GameServer with default port and world directory {@code worlds/default}.
      */
     public GameServer() {
-        this(PORT);
+        this(Path.of("worlds", "default"), PORT);
     }
 
     /**
-     * Creates a GameServer on a custom port.
+     * Creates a GameServer on the given world directory and port.
+     * The seed is loaded from {@code <worldDir>/world.dat}, or a random one is
+     * generated and written there if the file does not exist.
      *
-     * @param port TCP port to listen on
+     * @param worldDir path to the world root folder (e.g. {@code Path.of("worlds/survival")})
+     * @param port     TCP port to listen on
      */
-    public GameServer(int port) {
-        FlatFileChunkStorage storage = new FlatFileChunkStorage(Path.of("worlds", "default"));
-        this.serverWorld = new ServerWorld(WORLD_SEED, storage);
-        this.network     = new ServerNetworkManager(port, this);
+    public GameServer(Path worldDir, int port) {
+        WorldMeta meta         = WorldMeta.loadOrCreate(worldDir);
+        FlatFileChunkStorage storage = new FlatFileChunkStorage(worldDir);
+        this.serverWorld       = new ServerWorld(meta.getSeed(), storage);
+        this.network           = new ServerNetworkManager(port, this);
     }
 
     /**

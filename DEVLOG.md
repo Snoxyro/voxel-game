@@ -1996,6 +1996,53 @@ The fix is to scale the per-tick budgets by 3× so the per-second rate matches P
 
 ---
 
+## Entry 036 — Phase 5F: CLI Args, world.dat, Configurable Launch
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Created `WorldMeta` in `server/storage/` — reads/writes `world.dat` (8-byte
+  big-endian long seed) via `DataOutputStream`. `loadOrCreate(Path worldDir)`
+  handles all cases: new world (generate random seed + write), existing world
+  (read seed), corrupt file (warn + overwrite with new seed). Directory is created
+  if absent.
+- `GameServer` constructor chain replaced: default no-arg constructor uses
+  `worlds/default` and `GameServer.PORT`; primary constructor takes `(Path worldDir,
+  int port)`, calls `WorldMeta.loadOrCreate()`, constructs `FlatFileChunkStorage`
+  from the same `worldDir`, and passes the loaded seed to `ServerWorld`. Hardcoded
+  `WORLD_SEED` constant removed.
+- `ServerMain` updated with CLI arg parsing: `--world <name>` selects
+  `worlds/<name>/` (default: `default`), `--port <n>` overrides the TCP port
+  (default: 24463). Invalid port value falls back to default with a warning.
+- `Main` updated with `--username <name>` parsing (default: `Player`), passed
+  to `ClientNetworkManager`.
+- `build.gradle` updated: both `run` and `runServer` tasks forward
+  `--args="..."` from the Gradle command line via `project.hasProperty('args')`.
+
+### Decisions Made
+- `Main.java` still constructs `GameServer()` with no args (always `worlds/default`).
+  Singleplayer world selection belongs in the future menu UI, not the CLI.
+- No arg-parsing library — 10 lines of manual `args[]` scanning is simpler and
+  has zero dependencies for this number of flags.
+- `world.dat` format is just the seed long for now. Future fields (spawn coords,
+  game rules) append cleanly — reads are length-guarded by `DataInputStream`.
+
+### Problems Encountered
+- None. All four argument combinations tested and confirmed working.
+
+### AI Assistance Notes
+- Claude wrote all changes.
+
+### Lessons / Observations
+- The Ctrl+C → "Terminate batch job (Y/N)?" prompt on Windows is cmd.exe asking
+  whether to kill the Gradle wrapper batch script — not a code issue. The shutdown
+  hook fires correctly before that prompt appears.
+- `WorldMeta.loadOrCreate()` is the right pattern for any config file that must
+  exist: try to read, generate fresh if missing or corrupt, always return a valid
+  value. No caller ever handles a null or exception.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

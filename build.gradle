@@ -46,10 +46,13 @@ dependencies {
 
 application {
     mainClass = 'com.voxelgame.Main'
-    applicationDefaultJvmArgs = [
-        '-Xmx4G',
-        '-Xms512M'
-    ]
+    applicationDefaultJvmArgs = ['-Xmx4G', '-Xms512M']
+}
+
+tasks.named('run') {
+    if (project.hasProperty('args')) {
+        args project.property('args').split(' ')
+    }
 }
 
 // Dedicated server entry point — no LWJGL, headless JVM
@@ -59,6 +62,10 @@ tasks.register('runServer', JavaExec) {
     classpath   = sourceSets.main.runtimeClasspath
     mainClass   = 'com.voxelgame.server.ServerMain'
     jvmArgs     = ['-Xmx2G', '-Xms256M', '-Djava.awt.headless=true']
+    // Forward --args from Gradle command line
+    if (project.hasProperty('args')) {
+        args project.property('args').split(' ')
+    }
 }
 
 jar {
