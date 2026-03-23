@@ -95,7 +95,9 @@ capture a snapshot before handing work to a background thread.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 5 — Multiplayer. Sub-phase 5F next.
+Phase 6 — Foundation for extensibility. Sub-phase 6A next.
+
+### Phase 5 complete
 - 5A done: package restructure, Netty, handshake/login
 - 5B done: chunk streaming (server generates, client receives and renders)
 - 5C done: block interaction sync (break/place/broadcast)
@@ -103,8 +105,21 @@ Phase 5 — Multiplayer. Sub-phase 5F next.
   other-player broadcasting, RemotePlayer with interpolation
 - 5E done: world persistence — ChunkStorage interface, FlatFileChunkStorage,
   dirty tracking, background save executor, load-from-disk-or-generate
-- 5F next: singleplayer integration cleanup, dedicated server mode, CLI args,
-  world.dat seed file
+- 5F done: CLI args (--world, --port, --username), world.dat seed file per world
+
+### Phase 6 plan
+- 6A next: Block Registry — convert Block enum to registered class with stable
+  numeric IDs. Chunk serialization, network protocol, save files all switch from
+  ordinal() to registry ID. Most architecturally disruptive change remaining.
+- 6B: Menu / UI System — main menu, world select, multiplayer connect, settings,
+  pause menu.
+- 6C: Lighting + Day/Night Cycle — skylight, block light, sun position, ambient.
+- 6D: Entity System + Player Model — entity framework, skeletal model, item drops.
+- 6E: Items + Inventory — item registry, hotbar, crafting, block drops.
+
+### Phase 7 (after Phase 6)
+Modding API — block/item/entity registries and event hooks exposed to external code.
+Deferred until registries, UI, lighting, and entities all exist as stable foundations.
 
 ## Key Constraints
 - Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`

@@ -106,29 +106,32 @@ decisions, and lessons learned — including honest notes on AI assistance.
   - [x] Player physics (AABB collision, gravity, jumping)
   - [x] Air control, block placement guard, sky color
 - [x] Phase 4 — Performance optimization
-  - [x] Neighbor-aware meshing, window drag fix
-  - [x] Neighbor rebuild sequencing fix
+  - [x] Neighbor-aware meshing, window drag fix, rebuild sequencing fix
   - [x] Frustum culling, indexed rendering (EBO)
   - [x] Greedy meshing
   - [x] Chunk streaming with background generation
-  - [x] Meshing moved to worker thread (neighbor snapshot isolation)
-  - [x] Async neighbor remesh path
-  - [x] Thread pool (availableProcessors - 1 workers)
+  - [x] Meshing on worker thread (neighbor snapshot isolation)
+  - [x] Async neighbor remesh path, thread pool
   - [x] Terrain early exits, float[] buffer, flat byte[] block storage
   - [x] Heightmap column cache, Y occupancy clamping, schedule guard
-  - [x] Async remesh pipeline bug fix (self-remesh + dirty mark loss)
+  - [x] Async remesh pipeline bug fix
   - [x] Direction-biased generation queue (75/25 split)
   - [x] Ambient occlusion (baked per-vertex, diagonal flip)
   - [x] Textures (GL_TEXTURE_2D_ARRAY, procedural tiles, tiled UVs)
-- [ ] Phase 5 — Multiplayer (in progress)
+- [x] Phase 5 — Multiplayer
   - [x] 5A — Package restructure, Netty, handshake/login
   - [x] 5B — Chunk streaming over TCP
   - [x] 5C — Block interaction sync (break/place/broadcast)
-  - [ ] 5D — Player movement sync and other-player rendering
-    - [x] PlayerMoveSBPacket, streaming center follows player
-    - [ ] Other-player broadcasting (PlayerSpawn/Move/Despawn)
-    - [ ] RemotePlayer with position interpolation
-    - [ ] Client-side prediction + server reconciliation
-  - [ ] 5E — World persistence (save/load chunks to disk)
-  - [ ] 5F — Singleplayer integration cleanup
-- [ ] Phase 6 — Modding API
+  - [x] 5D — Player movement sync, RemotePlayer interpolation
+  - [x] 5E — World persistence (ChunkStorage, dirty tracking, GZIP files)
+  - [x] 5F — CLI args, world.dat seed file, configurable launch
+- [ ] Phase 6 — Foundation for extensibility
+  - [ ] 6A — Block Registry (Block enum → registered class, ID-stable saves)
+  - [ ] 6B — Menu / UI System (main menu, world select, multiplayer connect)
+  - [ ] 6C — Lighting + Day/Night Cycle
+  - [ ] 6D — Entity System + Player Model
+  - [ ] 6E — Items + Inventory
+- [ ] Phase 7 — Modding API
+  - [ ] Block / item / entity registry hooks exposed to external code
+  - [ ] World gen hooks, event listeners
+  - [ ] Scripting runtime

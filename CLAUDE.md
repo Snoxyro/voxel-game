@@ -136,20 +136,33 @@ component owned by `Player` — the pattern to follow.
 - **Phase 2 (done):** World generation (fBm noise, terrain layering)
 - **Phase 3 (done):** Gameplay basics — block placing/breaking, HUD, physics
 - **Phase 4 (done):** Performance — greedy meshing, AO, textures, async streaming
-- **Phase 5 (current):** Multiplayer — client/server split, chunk streaming, block sync
-- **Phase 6:** Modding API — scripting runtime, registry system
+- **Phase 5 (done):** Multiplayer — client/server split, chunk streaming, block sync,
+  player movement sync, world persistence, CLI args
+- **Phase 6 (current):** Foundation for extensibility — block registry, UI, lighting,
+  entities, items
+- **Phase 7:** Modding API — scripting runtime, registry hooks, event system
 
-## Phase 5 Sub-phases
-- **5A (done):** Package restructure, Netty, handshake/login
-- **5B (done):** Chunk streaming — server generates, client renders via TCP
-- **5C (done):** Block interaction sync — break/place packets, server broadcast
-- **5D (done):** Player movement sync — streaming center follows player;
-  other-player broadcasting with PlayerSpawn/Move/Despawn; RemotePlayer interpolation.
-  Client-side prediction deferred indefinitely — imperceptible on localhost.
-- **5E (done):** World persistence — ChunkStorage interface, FlatFileChunkStorage,
+## Phase 5 Sub-phases (all done)
+- **5A:** Package restructure, Netty, handshake/login
+- **5B:** Chunk streaming — server generates, client renders via TCP
+- **5C:** Block interaction sync — break/place packets, server broadcast
+- **5D:** Player movement sync — streaming center follows player;
+  other-player broadcasting with PlayerSpawn/Move/Despawn; RemotePlayer interpolation
+- **5E:** World persistence — ChunkStorage interface, FlatFileChunkStorage,
   dirty tracking, background save queue, load-from-disk-or-generate on executor
-- **5F (current):** Singleplayer integration cleanup, dedicated server mode, CLI args,
-  world.dat seed file (seed per world, not hardcoded)
+- **5F:** CLI args (--world, --port, --username), world.dat seed file per world
+
+## Phase 6 Sub-phases
+- **6A (next):** Block Registry — Block enum → registered class with stable IDs.
+  Chunk serialization, network protocol, and save files switch from ordinal() to
+  registry ID. Prerequisite for everything else in Phase 6.
+- **6B:** Menu / UI System — main menu, world selection, multiplayer connect screen,
+  settings, in-game pause menu.
+- **6C:** Lighting + Day/Night Cycle — skylight propagation, block light foundation,
+  sun cycle, ambient light.
+- **6D:** Entity System + Player Model — entity framework, skeletal player model,
+  item drop entities.
+- **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.
 
 ## How to Build and Run
 ```bash

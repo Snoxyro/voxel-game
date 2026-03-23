@@ -2043,6 +2043,72 @@ The fix is to scale the per-tick budgets by 3× so the per-second rate matches P
 
 ---
 
+## Entry 037 — Phase Roadmap Revision: Phase 6 Replanned
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer (complete)
+
+### What Was Decided
+Phase 6 was previously labelled "Modding API." After review, modding was pushed to
+Phase 7 because the prerequisite work it depends on does not exist yet:
+
+- `Block` is a hardcoded enum. A mod cannot register new block types without a
+  `BlockRegistry`. Converting Block from enum to a registered class touches Chunk
+  serialization, ChunkMesher, TerrainGenerator, the network protocol, and save files.
+  This refactor must happen before the modding API is designed — not inside it.
+- No menu system exists. World selection, multiplayer connect, and settings are all
+  CLI-only. A modding API without a UI to load mods from is incomplete.
+- No entity system exists. Mods that add mobs or items have nowhere to register them.
+- No item/inventory system exists. The gameplay loop is not functional enough to
+  meaningfully extend.
+
+### New Phase 6 Plan
+
+**6A — Block Registry**
+Convert `Block` from a Java enum to a registered class with stable numeric IDs.
+`Chunk` serialization, network protocol, and save files all switch from `ordinal()`
+to registry ID. This is the single most architecturally disruptive change remaining
+and is the prerequisite for everything else in Phase 6.
+
+**6B — Menu / UI System**
+Main menu (Singleplayer / Multiplayer / Quit), world selection screen (lists
+`worlds/` directory, create/delete), multiplayer connect screen (IP + port input),
+settings screen (render distance, username, key bindings), in-game pause menu.
+Resolves the current limitation where connecting to a running dedicated server
+requires CLI workarounds.
+
+**6C — Lighting + Day/Night Cycle**
+Skylight propagation (sunlight enters from top, decreases downward), basic block
+light (static brightness value per block type, foundation for torches), day/night
+cycle (sun position, ambient light level changes over time). Mods that add light
+sources need this system to exist first.
+
+**6D — Entity System + Player Model**
+Entity framework: position, AABB, update tick, server-side entity list, client-side
+rendering. Local player and remote players become proper entity instances. Basic
+skeletal player model with idle/walk/jump animations. Item entities (block drops).
+Prerequisite for mobs, throwable items, and anything animated.
+
+**6E — Items + Inventory**
+Item registry (same pattern as block registry from 6A), hotbar and full inventory
+screen, block drops on break, basic crafting grid. Makes the gameplay loop functional
+beyond just placing and breaking blocks.
+
+**Phase 7 — Modding API**
+With registries (blocks, items, entities), lighting, UI, and a real gameplay loop
+all in place, the modding API exposes `BlockRegistry.register()`,
+`ItemRegistry.register()`, `EntityRegistry.register()`, world gen hooks, and event
+listeners. Has something meaningful to offer because the game underneath it is built.
+
+### Deferred to Phase 8+
+- Non-solid blocks (slabs, stairs) — 6A prerequisite satisfied first, can be added
+  as the first real use-case of the new registry
+- Liquids — complex simulation, independent of everything else
+- Better world gen / biomes — can happen during or after Phase 6
+- Server standalone fat-jar distribution — trivial Gradle config, not blocking anything
+- Further performance optimizations — 120+ FPS already, no measurable bottleneck
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 
