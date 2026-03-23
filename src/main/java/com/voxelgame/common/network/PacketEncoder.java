@@ -56,6 +56,34 @@ public class PacketEncoder extends MessageToByteEncoder<Packet> {
             out.writeInt(p.cy());
             out.writeInt(p.cz());
 
+        } else if (msg instanceof BlockBreakPacket p) {
+            out.writeByte(PacketId.BLOCK_BREAK.id);
+            out.writeInt(p.worldX());
+            out.writeInt(p.worldY());
+            out.writeInt(p.worldZ());
+
+        } else if (msg instanceof BlockPlacePacket p) {
+            out.writeByte(PacketId.BLOCK_PLACE.id);
+            out.writeInt(p.worldX());
+            out.writeInt(p.worldY());
+            out.writeInt(p.worldZ());
+            out.writeInt(p.blockOrdinal());
+
+        } else if (msg instanceof PlayerMoveSBPacket p) {
+            out.writeByte(PacketId.PLAYER_MOVE_SB.id);
+            out.writeFloat(p.x());
+            out.writeFloat(p.y());
+            out.writeFloat(p.z());
+            out.writeFloat(p.yaw());
+            out.writeFloat(p.pitch());
+
+        } else if (msg instanceof BlockChangePacket p) {
+            out.writeByte(PacketId.BLOCK_CHANGE.id);
+            out.writeInt(p.worldX());
+            out.writeInt(p.worldY());
+            out.writeInt(p.worldZ());
+            out.writeInt(p.blockOrdinal());
+
         } else {
             throw new IllegalArgumentException(
                 "PacketEncoder: no serializer for " + msg.getClass().getSimpleName());

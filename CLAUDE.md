@@ -140,8 +140,9 @@ component owned by `Player` — the pattern to follow.
 ## Phase 5 Sub-phases
 - **5A (done):** Package restructure, Netty, handshake/login
 - **5B (done):** Chunk streaming — server generates, client renders via TCP
-- **5C (next):** Block interaction sync — client sends break/place, server broadcasts
-- **5D:** Player movement sync + client-side prediction
+- **5C (done):** Block interaction sync — break/place packets, server broadcast
+- **5D (partial):** Player movement sync — streaming center follows player (done);
+  other-player broadcasting and RemotePlayer rendering (todo)
 - **5E:** World persistence (save/load chunks to disk)
 - **5F:** Singleplayer integration cleanup, `runServer` dedicated mode
 

@@ -39,6 +39,7 @@ public class GameLoop {
 
     private final Window      window;
     private final ClientWorld clientWorld;
+    private final io.netty.channel.Channel serverChannel;
 
     private Camera                 camera;
     private InputHandler           inputHandler;
@@ -62,10 +63,13 @@ public class GameLoop {
      *
      * @param clientWorld the client-side world — receives chunks from the server,
      *                    provides block queries for physics and raycasting
+     * @param serverChannel the Netty channel connected to the server — used to send
+     *                      block interaction packets in Phase 5C
      */
-    public GameLoop(ClientWorld clientWorld) {
-        this.window      = new Window("Voxel Game", 1280, 720);
-        this.clientWorld = clientWorld;
+    public GameLoop(ClientWorld clientWorld, io.netty.channel.Channel serverChannel) {
+        this.window       = new Window("Voxel Game", 1280, 720);
+        this.clientWorld  = clientWorld;
+        this.serverChannel = serverChannel;
     }
 
     /**
@@ -245,6 +249,15 @@ public class GameLoop {
             camera.getPosition().set(player.getEyePosition());
         }
 
+        // --- Send position to server (drives chunk streaming center) ---
+        // Sent every tick regardless of whether position changed — simple and stateless.
+        // Phase 5D: throttle to 20/s to match server TPS if bandwidth becomes a concern.
+        Vector3f pos = camera.getPosition();
+        serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.PlayerMoveSBPacket(
+            pos.x, freecam ? pos.y : player.getBody().getPosition().y,
+            pos.z, camera.getYaw(), camera.getPitch()
+        ));
+
         // --- Block type selection ---
         if (inputHandler.isKeyDown(GLFW.GLFW_KEY_1)) selectedBlock = Block.GRASS;
         if (inputHandler.isKeyDown(GLFW.GLFW_KEY_2)) selectedBlock = Block.DIRT;
@@ -262,10 +275,21 @@ public class GameLoop {
         );
         lastRaycast = RayCaster.cast(camera.getPosition(), lookDir, clientWorld, REACH);
 
-        // --- Block interaction — Phase 5C ---
-        // Left click:  send BlockBreakPacket to server
-        // Right click: send BlockPlacePacket to server
-        // Disabled for Phase 5B — block data is server-authoritative.
+        // --- Block interaction ---
+        if (cursorCaptured && lastRaycast.hit()) {
+            if (inputHandler.wasMouseLeftClicked()) {
+                serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockBreakPacket(
+                    lastRaycast.blockX(), lastRaycast.blockY(), lastRaycast.blockZ()));
+            }
+            if (inputHandler.wasMouseRightClicked()) {
+                // Guard: don't place a block inside the player (physics mode only)
+                int px = lastRaycast.placeX(), py = lastRaycast.placeY(), pz = lastRaycast.placeZ();
+                if (freecam || !player.getBody().overlapsBlock(px, py, pz)) {
+                    serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockPlacePacket(
+                        px, py, pz, selectedBlock.ordinal()));
+                }
+            }
+        }
     }
 
     /**

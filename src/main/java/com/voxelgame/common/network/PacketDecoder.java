@@ -47,6 +47,19 @@ public class PacketDecoder extends MessageToMessageDecoder<ByteBuf> {
             case UNLOAD_CHUNK ->
                 new UnloadChunkPacket(in.readInt(), in.readInt(), in.readInt());
 
+            case BLOCK_BREAK ->
+                new BlockBreakPacket(in.readInt(), in.readInt(), in.readInt());
+
+            case BLOCK_PLACE ->
+                new BlockPlacePacket(in.readInt(), in.readInt(), in.readInt(), in.readInt());
+
+            case PLAYER_MOVE_SB ->
+                new PlayerMoveSBPacket(
+                    in.readFloat(), in.readFloat(), in.readFloat(), in.readFloat(), in.readFloat());
+
+            case BLOCK_CHANGE ->
+                new BlockChangePacket(in.readInt(), in.readInt(), in.readInt(), in.readInt());
+
             default -> throw new IllegalStateException(
                 "PacketDecoder: no deserializer for " + id);
         };

@@ -15,9 +15,12 @@ public final class PlayerSession {
     private final int playerId;
     private final String username;
     private final Channel channel;
-    private final float x;
-    private final float y;
-    private final float z;
+    // Position — updated each tick from PlayerMoveSBPacket on the server tick thread.
+    // Written only from the tick thread (via ClientHandler queuing), so no volatile needed
+    // as long as updates always flow through the pending queue pattern.
+    private volatile float x;
+    private volatile float y;
+    private volatile float z;
     private final Set<ChunkPos> loadedChunks = new HashSet<>();
 
     /**
@@ -34,6 +37,20 @@ public final class PlayerSession {
         this.playerId = playerId;
         this.username = username;
         this.channel = channel;
+        this.x = x;
+        this.y = y;
+        this.z = z;
+    }
+
+    /**
+     * Updates the player's known position. Called on the server tick thread
+     * after draining the pending move queue.
+     *
+     * @param x world-space X
+     * @param y world-space Y (feet)
+     * @param z world-space Z
+     */
+    public void updatePosition(float x, float y, float z) {
         this.x = x;
         this.y = y;
         this.z = z;

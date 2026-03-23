@@ -54,6 +54,8 @@ public class ServerHandler extends SimpleChannelInboundHandler<Packet> {
             handleChunkData(p);
         } else if (msg instanceof UnloadChunkPacket p) {
             handleUnloadChunk(p);
+        } else if (msg instanceof BlockChangePacket p) {
+            clientWorld.queueBlockChange(p.worldX(), p.worldY(), p.worldZ(), p.blockOrdinal());
         } else {
             System.out.println("[Client] Unhandled packet: " + msg.getClass().getSimpleName());
         }

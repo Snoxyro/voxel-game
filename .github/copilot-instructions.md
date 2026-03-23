@@ -93,13 +93,13 @@ capture a snapshot before handing work to a background thread.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 5 — Multiplayer. Sub-phase 5C (next): block interaction sync.
+Phase 5 — Multiplayer. Sub-phase 5D (partial).
 - 5A done: package restructure, Netty, handshake/login
 - 5B done: chunk streaming (server generates, client receives and renders)
-- 5C next: `BlockBreakPacket` / `BlockPlacePacket` → server validates → `BlockChangePacket` broadcast
-- 5D: player movement sync, client-side prediction
-- 5E: world persistence
-- 5F: singleplayer integration cleanup
+- 5C done: BlockBreakPacket / BlockPlacePacket → server validates → BlockChangePacket broadcast
+- 5D partial: PlayerMoveSBPacket → server updates PlayerSession position → streaming center follows player
+- 5D remaining: PlayerSpawn / PlayerMove / PlayerDespawn clientbound packets, RemotePlayer with interpolation
+- 5E next after 5D: world persistence
 
 ## Key Constraints
 - Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`

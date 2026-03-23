@@ -57,6 +57,7 @@ public class ClientWorld implements BlockView {
     private final ConcurrentLinkedQueue<PendingChunkData> pendingChunkData = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<ChunkPos>         pendingUnloads   = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<PendingMesh>      pendingMeshes    = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<PendingBlockChange> pendingBlockChanges = new ConcurrentLinkedQueue<>();
 
     // -------------------------------------------------------------------------
     // Mesh scheduling — main thread only
@@ -89,6 +90,9 @@ public class ClientWorld implements BlockView {
     /** Carrier for a completed mesh build from a worker thread. */
     private record PendingMesh(ChunkPos pos, float[] vertices) {}
 
+    /** Carrier for a server-authoritative block change. Applied on the main thread. */
+    private record PendingBlockChange(int worldX, int worldY, int worldZ, int blockOrdinal) {}
+
     /**
      * Creates a ClientWorld and starts the mesh worker thread pool.
      * Leaves one core for the main/render thread; uses all remaining for meshing.
@@ -119,6 +123,19 @@ public class ClientWorld implements BlockView {
     public void queueChunkData(int cx, int cy, int cz, byte[] blockData) {
         Chunk chunk = Chunk.fromBytes(blockData);
         pendingChunkData.offer(new PendingChunkData(new ChunkPos(cx, cy, cz), chunk));
+    }
+
+    /**
+     * Enqueues a server-authoritative block change for application on the main thread.
+     * Thread-safe — called from the Netty I/O thread.
+     *
+     * @param worldX     world-space X
+     * @param worldY     world-space Y
+     * @param worldZ     world-space Z
+     * @param blockOrdinal block ordinal (0 = AIR)
+     */
+    public void queueBlockChange(int worldX, int worldY, int worldZ, int blockOrdinal) {
+        pendingBlockChanges.offer(new PendingBlockChange(worldX, worldY, worldZ, blockOrdinal));
     }
 
     /**
@@ -163,6 +180,7 @@ public class ClientWorld implements BlockView {
      * </ol>
      */
     public void update() {
+        drainPendingBlockChanges();
         drainPendingChunkData();
         drainPendingUnloads();
         processDirtyMeshes();
@@ -172,6 +190,34 @@ public class ClientWorld implements BlockView {
     // -------------------------------------------------------------------------
     // Internal pipeline steps — main thread only
     // -------------------------------------------------------------------------
+
+    private void drainPendingBlockChanges() {
+        PendingBlockChange change;
+        while ((change = pendingBlockChanges.poll()) != null) {
+            Block block = Block.values()[change.blockOrdinal()];
+
+            int cx = Math.floorDiv(change.worldX(), Chunk.SIZE);
+            int cy = Math.floorDiv(change.worldY(), Chunk.SIZE);
+            int cz = Math.floorDiv(change.worldZ(), Chunk.SIZE);
+            ChunkPos pos = new ChunkPos(cx, cy, cz);
+
+            Chunk chunk = chunks.get(pos);
+            if (chunk == null) continue; // chunk not loaded client-side — ignore
+
+            chunk.setBlock(
+                Math.floorMod(change.worldX(), Chunk.SIZE),
+                Math.floorMod(change.worldY(), Chunk.SIZE),
+                Math.floorMod(change.worldZ(), Chunk.SIZE),
+                block
+            );
+
+            // Dirty-mark this chunk and any face-adjacent neighbors the modified block touches.
+            // A block at local coordinate 0 or SIZE-1 sits on a chunk boundary — the neighbor's
+            // mesh needs updating too because it may have been emitting a face toward that block.
+            dirtyMeshes.add(pos);
+            markNeighborsDirty(pos);
+        }
+    }
 
     private void drainPendingChunkData() {
         PendingChunkData pending;

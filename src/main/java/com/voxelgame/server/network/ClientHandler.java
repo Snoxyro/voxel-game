@@ -106,10 +106,18 @@ public class ClientHandler extends SimpleChannelInboundHandler<Packet> {
     }
 
     private void handlePlaying(ChannelHandlerContext ctx, Packet msg) {
-        // Phase 5C: handle BlockBreak / BlockPlace
-        // Phase 5D: handle PlayerMove
-        System.out.println("[Server] Unhandled play-state packet from " + username
-            + ": " + msg.getClass().getSimpleName());
+        if (msg instanceof BlockBreakPacket p) {
+            server.getServerWorld().applyBlockBreak(p.worldX(), p.worldY(), p.worldZ());
+        } else if (msg instanceof BlockPlacePacket p) {
+            server.getServerWorld().applyBlockPlace(p.worldX(), p.worldY(), p.worldZ(), p.blockOrdinal());
+        } else if (msg instanceof PlayerMoveSBPacket p) {
+            // Queue the position update for the tick thread via ServerWorld.
+            // Direct field write avoided — goes through the same queue pattern as connects/disconnects.
+            server.getServerWorld().queuePlayerMove(playerId, p.x(), p.y(), p.z());
+        } else {
+            System.out.println("[Server] Unhandled play-state packet from " + username
+                + ": " + msg.getClass().getSimpleName());
+        }
     }
 
     @Override

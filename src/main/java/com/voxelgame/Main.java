@@ -40,7 +40,7 @@ public class Main {
         network.connect();
 
         // --- Run the game ---
-        GameLoop gameLoop = new GameLoop(clientWorld);
+        GameLoop gameLoop = new GameLoop(clientWorld, network.getChannel());
         gameLoop.run(); // blocks until window is closed
 
         // --- Shutdown ---

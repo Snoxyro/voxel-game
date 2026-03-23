@@ -38,16 +38,16 @@ public class World implements BlockView {
     private static final int RENDER_DISTANCE_H = 16;
 
     /** Vertical chunk load radius in chunk units (above and below viewer). */
-    private static final int RENDER_DISTANCE_V = 6;
+    private static final int RENDER_DISTANCE_V = 8;
 
     /** Maximum chunk uploads (data stores) per frame from the pending queue. */
-    private static final int MAX_UPLOADS_PER_FRAME = 16;
+    private static final int MAX_UPLOADS_PER_FRAME = 256;
 
     /**
      * Maximum generation tasks submitted to the executor per tick.
      * Keeps the executor queue shallow so priority re-sorts take effect immediately.
      */
-    private static final int MAX_CHUNKS_PER_TICK = 16;
+    private static final int MAX_CHUNKS_PER_TICK = 64;
 
     // -------------------------------------------------------------------------
     // Chunk data — server tick thread only after draining

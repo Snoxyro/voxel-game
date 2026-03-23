@@ -38,14 +38,18 @@ public class ServerWorld {
      * Maximum chunks sent to a single player per tick.
      * Prevents a spike of large ChunkDataPackets flooding a newly connected client.
      */
-    private static final int MAX_CHUNKS_PER_PLAYER_PER_TICK = 16;
+    private static final int MAX_CHUNKS_PER_PLAYER_PER_TICK = 64;
 
     private final World world;
+
+    /** Carries a position update from the Netty thread to the tick thread. */
+    private record PendingMove(int playerId, float x, float y, float z) {}
 
     /**
      * Queues for cross-thread player lifecycle events.
      * Netty I/O threads write; server tick thread drains.
      */
+    private final ConcurrentLinkedQueue<PendingMove> pendingMoves = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<PlayerSession> pendingAdds      = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<Integer>        pendingRemovals  = new ConcurrentLinkedQueue<>(); // by playerId
 
@@ -73,6 +77,18 @@ public class ServerWorld {
      * </ol>
      */
     public void tick() {
+        // Drain pending position updates
+        PendingMove move;
+        while ((move = pendingMoves.poll()) != null) {
+            int id = move.playerId();
+            for (PlayerSession p : players) {
+                if (p.getPlayerId() == id) {
+                    p.updatePosition(move.x(), move.y(), move.z());
+                    break;
+                }
+            }
+        }
+
         // --- Drain pending player connects / disconnects ---
         PlayerSession add;
         while ((add = pendingAdds.poll()) != null) players.add(add);
@@ -137,6 +153,70 @@ public class ServerWorld {
             player.sendPacket(new UnloadChunkPacket(pos.x(), pos.y(), pos.z()));
             player.markChunkUnloaded(pos);
         }
+    }
+
+    /**
+     * Validates and applies a block break from a player. Called from the server tick
+     * thread via the pending action queue (Phase 5D will formalize this queue).
+     * Broadcasts the change to all players who have the affected chunk loaded.
+     *
+     * @param worldX world-space X of the broken block
+     * @param worldY world-space Y
+     * @param worldZ world-space Z
+     */
+    public void applyBlockBreak(int worldX, int worldY, int worldZ) {
+        // Server-side validation goes here in Phase 5D (range check, permissions, etc.)
+        world.setBlock(worldX, worldY, worldZ, com.voxelgame.common.world.Block.AIR);
+        broadcastBlockChange(worldX, worldY, worldZ, 0); // 0 = AIR ordinal
+    }
+
+    /**
+     * Validates and applies a block place from a player. Broadcasts the change to all
+     * players who have the affected chunk loaded.
+     *
+     * @param worldX      world-space X of the placed block
+     * @param worldY      world-space Y
+     * @param worldZ      world-space Z
+     * @param blockOrdinal Block.ordinal() of the placed type
+     */
+    public void applyBlockPlace(int worldX, int worldY, int worldZ, int blockOrdinal) {
+        com.voxelgame.common.world.Block[] blocks = com.voxelgame.common.world.Block.values();
+        if (blockOrdinal <= 0 || blockOrdinal >= blocks.length) return; // reject invalid/AIR place
+        world.setBlock(worldX, worldY, worldZ, blocks[blockOrdinal]);
+        broadcastBlockChange(worldX, worldY, worldZ, blockOrdinal);
+    }
+
+    /**
+     * Sends a BlockChangePacket to every player who has the affected chunk loaded.
+     * Players without the chunk don't need the update — they'll receive correct data
+     * when the chunk streams to them later.
+     */
+    private void broadcastBlockChange(int worldX, int worldY, int worldZ, int blockOrdinal) {
+        ChunkPos affected = new ChunkPos(
+            Math.floorDiv(worldX, com.voxelgame.common.world.Chunk.SIZE),
+            Math.floorDiv(worldY, com.voxelgame.common.world.Chunk.SIZE),
+            Math.floorDiv(worldZ, com.voxelgame.common.world.Chunk.SIZE)
+        );
+        com.voxelgame.common.network.packets.BlockChangePacket packet =
+            new com.voxelgame.common.network.packets.BlockChangePacket(worldX, worldY, worldZ, blockOrdinal);
+
+        for (PlayerSession player : players) {
+            if (player.hasChunk(affected)) {
+                player.sendPacket(packet);
+            }
+        }
+    }
+
+    /**
+     * Enqueues a position update from a client. Safe to call from the Netty I/O thread.
+     *
+     * @param playerId the player whose position changed
+     * @param x        new world-space X
+     * @param y        new world-space Y (feet)
+     * @param z        new world-space Z
+     */
+    public void queuePlayerMove(int playerId, float x, float y, float z) {
+        pendingMoves.offer(new PendingMove(playerId, x, y, z));
     }
 
     // -------------------------------------------------------------------------

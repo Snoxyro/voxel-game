@@ -1753,6 +1753,121 @@ Milestone: `./gradlew run` = singleplayer, `./gradlew runServer` = dedicated ser
 
 ---
 
+## Entry 033 — Phase 5C: Block Interaction Sync
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Added three packets: `BlockBreakPacket`, `BlockPlacePacket` (serverbound),
+  `BlockChangePacket` (clientbound). All three added to `PacketEncoder` and
+  `PacketDecoder`.
+- `ClientWorld` gained a `pendingBlockChanges` concurrent queue and
+  `queueBlockChange()` entry point (called from Netty thread). `drainPendingBlockChanges()`
+  runs first in `update()` — applies the server-authoritative block change to the
+  local chunk and dirty-marks the chunk and its face-adjacent neighbors for remesh.
+- `ServerWorld` gained `applyBlockBreak()`, `applyBlockPlace()`, and
+  `broadcastBlockChange()`. Break/place validation is a stub — Phase 5D will add
+  range checks and permission guards. Broadcast targets only players who have the
+  affected chunk loaded — players without the chunk receive correct data when it
+  streams to them later.
+- `ClientHandler.handlePlaying()` now routes `BlockBreakPacket` and `BlockPlacePacket`
+  to `ServerWorld` instead of logging them as unhandled.
+- `ServerHandler.channelRead0()` routes `BlockChangePacket` to
+  `ClientWorld.queueBlockChange()`.
+- `GameLoop` gained a `serverChannel` field (injected via constructor). Block
+  interaction in `update()` now sends packets to the server instead of calling
+  `world.setBlock()` directly. The player overlap guard is preserved for physics
+  mode; freecam bypasses it.
+- `Main.java` updated to pass `network.getChannel()` to `GameLoop`.
+
+### Decisions Made
+- Client does not optimistically update the local world — it waits for the server's
+  `BlockChangePacket` before the block visually changes. This is one RTT of latency
+  on localhost, which is imperceptible. Client-side prediction deferred to Phase 5D.
+- `broadcastBlockChange` skips players without the chunk loaded — avoids sending
+  updates for chunks the client hasn't received yet and would ignore anyway.
+
+### Known Issue (noted, deferred)
+`applyBlockBreak/Place` are called from `ClientHandler` on the Netty I/O thread
+but access `players` (an `ArrayList` owned by the tick thread) — a data race.
+Benign for single-player. Resolved in Entry 034 when the pending move queue was added.
+
+### Problems Encountered
+- None. Block break and place worked on first run.
+
+### Lessons / Observations
+- The server-authoritative model means two clients automatically see each other's
+  block edits — the broadcast loop handles it with no extra client-side logic.
+
+---
+
+## Entry 034 — Phase 5D (Partial): Player Movement Sync and Streaming Fix
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Added `PlayerMoveSBPacket` (serverbound): `float x, y, z, yaw, pitch`. Registered
+  in `PacketEncoder` and `PacketDecoder`.
+- `PlayerSession.x/y/z` changed from `private final float` to `private volatile float`
+  with a new `updatePosition(x, y, z)` method. Volatile makes reads safe across the
+  Netty and tick threads without a full lock.
+- `ServerWorld` gained a `pendingMoves` concurrent queue and `queuePlayerMove()` entry
+  point. The tick thread drains it at the start of each tick alongside player
+  connects/disconnects — position updates now flow through the same queue pattern,
+  which also resolves the data race from Entry 033.
+- `ClientHandler.handlePlaying()` routes `PlayerMoveSBPacket` to
+  `ServerWorld.queuePlayerMove()`.
+- `GameLoop.update()` sends a `PlayerMoveSBPacket` every tick. Y coordinate is feet
+  position in physics mode, camera Y in freecam — either is sufficient for streaming.
+- Result: the server's chunk streaming center now follows the player. Moving in any
+  direction generates new chunks and unloads distant ones correctly.
+
+### Decisions Made
+- Packet sent every tick (60/s) rather than throttled to 20/s. The server discards
+  redundant updates harmlessly — the queue drains all of them at the start of each
+  tick and the last write wins. Throttling deferred until bandwidth is measured as
+  a concern.
+- Yaw and pitch are included in the packet for future use in Phase 5D (look-direction
+  biased generation, other-player rendering) — no extra cost now.
+
+### Problems Encountered
+- None. Streaming followed the player correctly on first run.
+
+### What Remains in Phase 5D
+- Broadcasting other players' positions (`PlayerSpawn`, `PlayerMove`, `PlayerDespawn`
+  clientbound packets).
+- `RemotePlayer` entity with position interpolation for smooth 20Hz → 60 FPS rendering.
+- Client-side prediction + server reconciliation for local player.
+
+---
+
+## Entry 035 — Server TPS Throughput Fix
+**Date:** 23.03.2026
+**Phase:** 5 — Multiplayer
+
+### What Was Done
+- Raised three throughput constants to compensate for the move from 60 UPS (Phase 4
+  game loop) to 20 TPS (server tick):
+  - `World.MAX_UPLOADS_PER_FRAME`: 16 → 256. On the server this is a `HashMap.put()`
+    with zero GL cost — the old cap was protecting against mesh build time that no
+    longer exists here.
+  - `World.MAX_CHUNKS_PER_TICK`: 16 → 64. Restores generation submission rate to
+    roughly Phase 4 levels (64 × 20 TPS ≈ 960 × 16 UPS).
+  - `ServerWorld.MAX_CHUNKS_PER_PLAYER_PER_TICK`: 16 → 64. Restores client delivery
+    rate to match generation throughput.
+
+### Root Cause
+All three constants were designed for a 60 UPS loop. The server tick runs at 20 TPS —
+one third the rate. Effective throughput dropped to one third without any code change.
+The fix is to scale the per-tick budgets by 3× so the per-second rate matches Phase 4.
+
+### Lessons / Observations
+- Per-tick budget constants require re-evaluation whenever the tick rate changes.
+  Documenting the intended per-second rate alongside the constant would make this
+  class of bug self-evident at a glance.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 
