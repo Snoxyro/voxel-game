@@ -2455,6 +2455,152 @@ listeners. Has something meaningful to offer because the game underneath it is b
 
 ---
 
+## Entry 042 — UI Theme System + 6B-5 Multiplayer Connect + Bug Fixes
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility
+
+### What Was Done
+
+#### UI Theme System (pre-6B-5 cleanup)
+- Added `UiRenderer.lineHeight()` — delegates to `GlyphAtlas.lineHeight()`.
+- Added int-color overloads to `UiRenderer`: `drawRect(x,y,w,h,int color)`,
+  `drawText(x,y,String,int color)`, `drawCenteredText(cx,y,String,int color)`.
+  Colors packed as `0xRRGGBBAA`. Float overloads preserved.
+- Created `UiTheme.java` in `engine/ui/` — abstract base class. Holds all named
+  color fields (`colBackground`, `colPanel`, `colButton`, `colButtonHover`,
+  `colDangerButton`, `colText`, `colInputBg`, `colListItem`, `colOverlayDim`, etc.)
+  as `protected int` fields (packed RGBA). Owns a `UiRenderer` reference. Exposes
+  compound draw helpers: `drawBackground`, `drawPanel`, `drawButton`,
+  `drawDangerButton`, `drawInputField` (with integrated caret), `drawListItem`,
+  `drawTitle`, `drawLabel`, `drawDimLabel`, `drawWarnLabel`, `drawOverlayDim`.
+  Forwards `measureText()` and `lineHeight()`. Draw helpers are instance methods —
+  subclasses can override shape/layout behavior, not just colors.
+- Created `DarkTheme.java` — default theme. Deep navy panel, grey-blue buttons,
+  red danger buttons, gold title text.
+- Created `LightTheme.java` — alternate theme. Light grey background, muted
+  blue-grey buttons, deep blue title text.
+- Changed `Screen.render()` signature from `(UiRenderer r, int sw, int sh)` to
+  `(UiTheme theme, int sw, int sh)`.
+- Updated `ScreenManager` — constructs `DarkTheme` wrapping `UiRenderer`. Exposes
+  `setTheme(UiTheme)` and `getTheme()`. `renderActiveScreen()` calls
+  `activeTheme.begin()/end()` and passes `activeTheme` to `render()`.
+- Refactored `MainMenuScreen`, `WorldSelectScreen`, `PauseMenuScreen` — all color
+  constants removed, raw `r.drawRect/drawText` calls replaced with `theme.*` helpers.
+
+#### 6B-5: Multiplayer Connect Screen
+- Created `MultiplayerConnectScreen.java` in `game/screen/` — two input fields
+  (host pre-filled `localhost`, port pre-filled `24463`), Connect and Back buttons,
+  status line for connecting state and error messages.
+- Input handling: Tab switches field focus, Enter triggers connect, arrow keys/
+  Home/End/Backspace/Delete all work. Port field accepts digits only.
+- `ConnectHandler` functional interface — `GameLoop` supplies the implementation,
+  screen knows nothing about networking.
+- `AtomicBoolean cancelledFlag` — set in `onHide()` if the player clicks Back
+  during a connection attempt. Background thread checks flag before posting any
+  main-thread action and cleans up the partial connection silently.
+- `connecting` boolean gates Connect button and all input — prevents spam.
+  Reset in `onShow()` for a clean slate on every visit.
+- Added `connectToMultiplayer(host, port, cancelledFlag, onFailure)` to `GameLoop`
+  — daemon thread, no embedded server started. On success: stores `activeNetwork`,
+  sets `serverChannel`, posts GL-thread action to capture cursor and dismiss screen.
+  On failure: posts `onFailure` callback with a friendly error string.
+- Added `friendlyErrorMessage(Exception)` to `GameLoop` — maps raw Netty exception
+  messages to short human-readable strings ("Connection refused.", "Connection timed
+  out.", "Unknown host.", etc.).
+- Added `onMultiplayer` callback to `MainMenuScreen` — replaces the stub println.
+- Added `CONNECT_TIMEOUT_MS = 5000` to `ClientNetworkManager` —
+  `ChannelOption.CONNECT_TIMEOUT_MILLIS` on the Bootstrap.
+- `returnToMainMenu()` already handles multiplayer correctly — `activeServer` is
+  null so the embedded server stop is skipped; `activeNetwork.disconnect()` closes
+  the external connection cleanly.
+
+#### Bug Fix: Pause menu freezing world updates
+- `GameLoop.loop()` previously skipped `clientWorld.update()` entirely whenever
+  `hasActiveScreen()` was true, including overlay screens (pause menu).
+- `clientWorld.update()` drains `pendingBlockChanges` and `pendingPlayerEvents`
+  queues written by Netty I/O threads — skipping it caused block changes and
+  remote player moves to queue up and only apply on resume.
+- Fix: added `isActiveScreenOverlay()` branch — overlay screens run
+  `clientWorld.update()` but skip player input. Full-screen menus still skip
+  everything.
+
+#### Bug Fix: Singleplayer port clash hanging forever
+- When `ServerNetworkManager.start()` failed to bind the port, it threw before
+  reaching `readyLatch.countDown()`. `server.awaitReady()` in the launch thread
+  blocked indefinitely — the world select screen stayed stuck on "Launching...".
+- Fix: wrapped the bind call in try/catch inside `ServerNetworkManager.start()`.
+  On failure, stores the exception via `server.setBindError(e)` and calls
+  `readyLatch.countDown()` so `awaitReady()` always unblocks.
+- Added `bindError` volatile field + `getBindError()`/`setBindError()` to
+  `GameServer`.
+- `launchWorld()` checks `server.getBindError()` after `awaitReady()` and throws
+  with a human-readable message if set.
+- `WorldSelectScreen` gained `statusMessage` field and `setStatusMessage(String)`
+  setter. `renderLaunching()` shows the error in warn color with a "Back to Menu"
+  button when `statusMessage` is non-empty. `onMouseClick` in `LAUNCHING` mode
+  handles the Back button via `onBack.run()`. `statusMessage` reset in `onShow()`.
+- `launchWorld()` now accepts `Consumer<String> onFailure` — posts error to
+  `WorldSelectScreen.setStatusMessage` via `pendingMainThreadAction`.
+- `createMainMenu()` uses `WorldSelectScreen[] ref` single-element array to
+  capture the screen reference before construction for the error callback wiring.
+
+### TODO — Known Issue: Chunk Loading Wave Pattern
+When a second client connects to a multiplayer server, chunks load in a wave from
+left to right (HashMap iteration order of loaded chunk positions) rather than
+expanding outward from the spawn point. Spawn chunks arrive late, causing the
+player to fall through the ground before they load.
+
+**Root cause:** `ServerWorld` iterates chunk positions in `HashMap` order when
+deciding what to stream to a new player. No distance-from-spawn sort is applied.
+
+**Correct fix (Option A):** Sort the per-player pending chunk send queue by
+distance from the player's current position in `ServerWorld`. Spawn chunks stream
+first, ground exists before the player is subject to gravity.
+
+**Safety net (Option B):** Hold the player in gravity-disabled floating state in
+`ClientWorld`/`GameLoop` until the chunk at spawn is confirmed meshed.
+
+Option A fixes the root cause and the visual wave. Option B is a fallback.
+Deferred to the next session — do this before any other work.
+
+### Decisions Made
+- `UiTheme` is an abstract class, not an interface, so draw helpers can share
+  implementation. Color fields are `protected` so subclasses can override
+  individual values without extending the draw behavior.
+- Theme swap is a single `ScreenManager.setTheme()` call — no GL work, no
+  resource recreation. Takes effect on the next frame.
+- `ThemeRegistry` deferred to Phase 7 (modding). `ScreenManager` holds the active
+  theme directly for now.
+- `connectToMultiplayer` keeps `activeServer = null` — `returnToMainMenu()` already
+  null-checks before stopping the server. No multiplayer-specific teardown path.
+- `WorldSelectScreen[] ref` lambda capture trick — standard Java workaround for
+  capturing a not-yet-assigned variable. Kept in `createMainMenu()` to avoid
+  adding a `setLaunchCallback()` setter to `WorldSelectScreen`.
+
+### Problems Encountered
+- `MainMenuScreen` constructor call in `createMainMenu()` reported "undefined
+  constructor" after adding the `onMultiplayer` parameter. Root cause: nested
+  lambda type inference failure — Java reported the outer constructor as undefined
+  instead of the actual type error inside a nested lambda. Fixed by extracting each
+  lambda into an explicitly typed `Runnable` local variable.
+
+### AI Assistance Notes
+- Claude wrote all new files and modifications.
+- Copilot generated `LightTheme.java` and refactored the three existing screens to
+  use `UiTheme`.
+
+### Lessons / Observations
+- When Java reports "constructor X is undefined" and the constructor clearly exists,
+  the real error is almost always a type mismatch inside a nested lambda argument.
+  Extract lambdas to typed locals to surface the actual error.
+- `AtomicBoolean cancelledFlag` is the right primitive for "background thread should
+  abort" — single writer (GL thread via `onHide`), single reader (background thread).
+  No lock needed.
+- A `CountDownLatch` that never counts down is an infinite hang with no diagnostic.
+  Any code path that can prevent the countDown must have a catch that still calls it.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

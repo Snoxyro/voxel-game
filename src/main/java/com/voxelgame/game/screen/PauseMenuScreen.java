@@ -1,6 +1,6 @@
 package com.voxelgame.game.screen;
 
-import com.voxelgame.engine.ui.UiRenderer;
+import com.voxelgame.engine.ui.UiTheme;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -20,14 +20,6 @@ public class PauseMenuScreen implements Screen {
     private static final int BUTTON_W   = 200;
     private static final int BUTTON_H   = 40;
     private static final int BUTTON_GAP = 12;
-
-    // Slightly more opaque than main menu — world is visible behind this
-    private static final float PANEL_R = 0.08f, PANEL_G = 0.08f, PANEL_B = 0.08f, PANEL_A = 0.80f;
-
-    private static final float BTN_R     = 0.25f, BTN_G = 0.25f, BTN_B = 0.25f, BTN_A = 1.0f;
-    private static final float BTN_HOV_R = 0.40f, BTN_HOV_G = 0.40f, BTN_HOV_B = 0.40f;
-    private static final float TXT_R     = 1.00f, TXT_G = 1.00f, TXT_B = 1.00f, TXT_A = 1.0f;
-    private static final float TITLE_R   = 1.00f, TITLE_G = 0.85f, TITLE_B = 0.30f, TITLE_A = 1.0f;
 
     private final ScreenManager screenManager;
     private final Runnable      onResume;
@@ -65,7 +57,7 @@ public class PauseMenuScreen implements Screen {
     public void onHide() { /* nothing to tear down */ }
 
     @Override
-    public void render(UiRenderer r, int sw, int sh) {
+    public void render(UiTheme theme, int sw, int sh) {
         double[] cx = {0}, cy = {0};
         GLFW.glfwGetCursorPos(GLFW.glfwGetCurrentContext(), cx, cy);
         mouseX = (int) cx[0];
@@ -74,20 +66,23 @@ public class PauseMenuScreen implements Screen {
         int panelX = (sw - PANEL_W) / 2;
         int panelY = (sh - PANEL_H) / 2;
 
-        r.drawRect(panelX, panelY, PANEL_W, PANEL_H, PANEL_R, PANEL_G, PANEL_B, PANEL_A);
+        theme.drawOverlayDim(sw, sh);
+        theme.drawPanel(panelX, panelY, PANEL_W, PANEL_H);
 
         String title = "PAUSED";
-        int titleX = panelX + (PANEL_W - r.measureText(title)) / 2;
-        r.drawText(titleX, panelY + 14, title, TITLE_R, TITLE_G, TITLE_B, TITLE_A);
+        theme.drawTitle(panelX + PANEL_W / 2.0f, panelY + 14, title);
 
         int btnX  = (sw - BUTTON_W) / 2;
         int btn1Y = panelY + 60;
         int btn2Y = btn1Y + BUTTON_H + BUTTON_GAP;
         int btn3Y = btn2Y + BUTTON_H + BUTTON_GAP;
 
-        drawButton(r, "Resume",    btnX, btn1Y, BUTTON_W, BUTTON_H);
-        drawButton(r, "Main Menu", btnX, btn2Y, BUTTON_W, BUTTON_H);
-        drawButton(r, "Quit",      btnX, btn3Y, BUTTON_W, BUTTON_H);
+        theme.drawButton(btnX, btn1Y, BUTTON_W, BUTTON_H, "Resume",
+            hits(mouseX, mouseY, btnX, btn1Y, BUTTON_W, BUTTON_H));
+        theme.drawButton(btnX, btn2Y, BUTTON_W, BUTTON_H, "Main Menu",
+            hits(mouseX, mouseY, btnX, btn2Y, BUTTON_W, BUTTON_H));
+        theme.drawButton(btnX, btn3Y, BUTTON_W, BUTTON_H, "Quit",
+            hits(mouseX, mouseY, btnX, btn3Y, BUTTON_W, BUTTON_H));
     }
 
     @Override
@@ -116,22 +111,6 @@ public class PauseMenuScreen implements Screen {
 
     @Override
     public void onCharTyped(char c) { /* no text input */ }
-
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private void drawButton(UiRenderer r, String label, int x, int y, int w, int h) {
-        boolean hovered = hits(mouseX, mouseY, x, y, w, h);
-        float br = hovered ? BTN_HOV_R : BTN_R;
-        float bg = hovered ? BTN_HOV_G : BTN_G;
-        float bb = hovered ? BTN_HOV_B : BTN_B;
-        r.drawRect(x, y, w, h, br, bg, bb, BTN_A);
-
-        int tx = x + (w - r.measureText(label)) / 2;
-        int ty = y + (h - 16) / 2;
-        r.drawText(tx, ty, label, TXT_R, TXT_G, TXT_B, TXT_A);
-    }
 
     private boolean hits(int px, int py, int x, int y, int w, int h) {
         return px >= x && px <= x + w && py >= y && py <= y + h;

@@ -8,13 +8,16 @@ import com.voxelgame.common.world.RayCaster;
 import com.voxelgame.common.world.RaycastResult;
 import com.voxelgame.game.Player;
 import com.voxelgame.game.screen.MainMenuScreen;
+import com.voxelgame.game.screen.MultiplayerConnectScreen;
 import com.voxelgame.game.screen.PauseMenuScreen;
 import com.voxelgame.game.screen.ScreenManager;
 import com.voxelgame.game.screen.WorldSelectScreen;
 import com.voxelgame.server.GameServer;
 
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
@@ -113,18 +116,29 @@ public class GameLoop {
      * return here without duplicating the callback wiring.
      */
     private MainMenuScreen createMainMenu() {
-        return new MainMenuScreen(
-            screenManager,
-            // Singleplayer → push world selection screen
-            () -> screenManager.setScreen(new WorldSelectScreen(
+        Runnable onSingleplayer = () -> {
+            // Need the screen reference before constructing it to wire the error callback.
+            // Use a single-element array as a mutable capture (standard Java lambda trick).
+            WorldSelectScreen[] ref = new WorldSelectScreen[1];
+            ref[0] = new WorldSelectScreen(
                 screenManager,
-                this::launchWorld, // BiConsumer<String, Long> — matches the new signature
-                // Back button returns to main menu
+                (name, seed) -> launchWorld(name, seed, msg -> {
+                    if (ref[0] != null) ref[0].setStatusMessage(msg);
+                }),
                 () -> screenManager.setScreen(createMainMenu())
-            )),
-            // Quit → close window
-            () -> GLFW.glfwSetWindowShouldClose(window.getWindowHandle(), true)
-        );
+            );
+            screenManager.setScreen(ref[0]);
+        };
+
+        Runnable onMultiplayer = () -> screenManager.setScreen(new MultiplayerConnectScreen(
+            screenManager,
+            this::connectToMultiplayer,
+            () -> screenManager.setScreen(createMainMenu())
+        ));
+
+        Runnable onQuit = () -> GLFW.glfwSetWindowShouldClose(window.getWindowHandle(), true);
+
+        return new MainMenuScreen(screenManager, onSingleplayer, onMultiplayer, onQuit);
     }
 
     /**
@@ -137,8 +151,9 @@ public class GameLoop {
      *
      * @param worldName subdirectory of {@code worlds/} to load or create
      * @param seed      the seed for the new world, or null for a random seed
+     * @param onFailure callback to invoke if the launch fails
      */
-    private void launchWorld(String worldName, Long seed) {
+    private void launchWorld(String worldName, Long seed, Consumer<String> onFailure) {
         Thread launchThread = new Thread(() -> {
             try {
                 Path worldDir = Path.of("worlds", worldName);
@@ -152,6 +167,11 @@ public class GameLoop {
 
                 // Blocks until the Netty port is bound (~<100 ms on localhost)
                 server.awaitReady();
+
+                // Check if the port bind failed (e.g. port already in use)
+                if (server.getBindError() != null) {
+                    throw new Exception("Failed to bind port " + GameServer.PORT + ": " + server.getBindError().getMessage());
+                }
 
                 ClientNetworkManager network = new ClientNetworkManager(
                     "localhost", GameServer.PORT, username, clientWorld
@@ -175,11 +195,97 @@ public class GameLoop {
                 });
 
             } catch (Exception e) {
-                System.err.println("[GameLoop] Failed to launch world '" + worldName + "': " + e.getMessage());
+                String msg = e.getMessage() != null ? e.getMessage() : "Failed to start server.";
+                pendingMainThreadAction.set(() -> onFailure.accept(msg));
             }
         }, "world-launch");
         launchThread.setDaemon(true);
         launchThread.start();
+    }
+
+    /**
+     * Begins a multiplayer connection attempt on a daemon background thread.
+     * No embedded server is started — connects directly to an external server.
+     *
+     * <p>On success: stores the network reference and posts a main-thread action
+     * that captures the cursor and dismisses the connect screen to enter gameplay.
+     *
+     * <p>On failure: posts {@code onFailure} to the GL thread via
+     * {@link #pendingMainThreadAction} so the connect screen can display the error.
+     *
+     * <p>Cancellation: if {@code cancelledFlag} is set (player clicked Back),
+     * the thread discards its result and cleans up the partial connection silently.
+     *
+     * @param host          server hostname or IP address
+     * @param port          server TCP port
+     * @param cancelledFlag written by {@link MultiplayerConnectScreen#onHide()} to signal abort
+     * @param onFailure     called on the GL thread with a human-readable error message
+     */
+    private void connectToMultiplayer(String host, int port, AtomicBoolean cancelledFlag, Consumer<String> onFailure) {
+        Thread connectThread = new Thread(() -> {
+            ClientNetworkManager network =
+                    new ClientNetworkManager(host, port, username, clientWorld);
+            try {
+                network.connect(); // blocks until TCP handshake completes or throws
+
+                if (cancelledFlag.get()) {
+                    // Player navigated away while this thread was connecting — discard
+                    network.disconnect();
+                    return;
+                }
+
+                // Volatile writes — visible to the GL thread on the next loop iteration
+                this.activeNetwork = network;
+                this.serverChannel = network.getChannel();
+                // activeServer stays null — there is no embedded server for multiplayer
+
+                pendingMainThreadAction.set(() -> {
+                    if (cancelledFlag.get()) {
+                        // Extremely narrow race: cancelled just after the check above.
+                        // returnToMainMenu() will clean up if the player navigates away later.
+                        return;
+                    }
+                    // Enter gameplay: capture cursor and dismiss the connect screen
+                    cursorCaptured = true;
+                    GLFW.glfwSetInputMode(window.getWindowHandle(),
+                            GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+                    inputHandler.resetMouseDelta();
+                    screenManager.setScreen(null);
+                });
+
+            } catch (Exception e) {
+                if (cancelledFlag.get()) {
+                    // Player left before we could report the failure — clean up silently
+                    try { network.disconnect(); } catch (Exception ignored) {}
+                    return;
+                }
+                String msg = friendlyErrorMessage(e);
+                pendingMainThreadAction.set(() -> onFailure.accept(msg));
+            }
+        }, "multiplayer-connect");
+        connectThread.setDaemon(true);
+        connectThread.start();
+    }
+
+    /**
+     * Converts a raw Netty connection exception into a short, user-readable string.
+     * Netty messages contain addresses and stack details that are unhelpful in a UI context.
+     *
+     * @param e the exception thrown by {@link ClientNetworkManager#connect()}
+     * @return a message short enough to fit the connect screen status line
+     */
+    private static String friendlyErrorMessage(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null)                                          return "Connection failed.";
+        if (msg.contains("Connection refused"))                   return "Connection refused.";
+        if (msg.contains("timed out")
+            || msg.contains("ETIMEDOUT")
+            || msg.contains("ConnectTimeoutException"))           return "Connection timed out.";
+        if (msg.contains("No route to host"))                     return "Host unreachable.";
+        if (msg.contains("nodename nor servname")
+            || msg.contains("Name or service not known"))         return "Unknown host.";
+        // Fallback: truncate raw message to fit the status line
+        return msg.length() > 55 ? msg.substring(0, 52) + "..." : msg;
     }
 
     /**
@@ -318,7 +424,13 @@ public class GameLoop {
             accumulator       += elapsed;
 
             while (accumulator >= updateInterval) {
-                if (!screenManager.hasActiveScreen()) {
+                if (screenManager.isActiveScreenOverlay()) {
+                    // World state must keep draining during overlay screens (pause menu) —
+                    // block changes and remote player moves queue up on Netty threads and
+                    // must be applied every frame regardless of menu state.
+                    // Player input and movement are intentionally skipped while paused.
+                    clientWorld.update();
+                } else if (!screenManager.hasActiveScreen()) {
                     update();
                 }
                 updates++;

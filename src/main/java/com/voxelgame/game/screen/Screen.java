@@ -1,6 +1,6 @@
 package com.voxelgame.game.screen;
 
-import com.voxelgame.engine.ui.UiRenderer;
+import com.voxelgame.engine.ui.UiTheme;
 
 /**
  * A full-screen UI state — main menu, world selection, pause menu, etc.
@@ -38,11 +38,11 @@ public interface Screen {
     /**
      * Renders the screen for one frame.
      *
-     * @param renderer     the active {@link UiRenderer} (already begun)
+     * @param theme        the active {@link UiTheme}
      * @param screenWidth  current framebuffer width in pixels
      * @param screenHeight current framebuffer height in pixels
      */
-    void render(UiRenderer renderer, int screenWidth, int screenHeight);
+    void render(UiTheme theme, int screenWidth, int screenHeight);
 
     /**
      * Handles a mouse button press.

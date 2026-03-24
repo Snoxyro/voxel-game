@@ -79,9 +79,12 @@ src/main/java/com/voxelgame/
 │       └── ServerHandler.java
 ├── engine/                    ← GL/GLFW systems — client-only, never server
 │   ├── ui/                    ← UI rendering subsystem
-│   │   ├── GlyphAtlas.java    ← AWT font baked to GL_TEXTURE_2D; measureText(), charWidth()
+│   │   ├── GlyphAtlas.java    ← AWT font baked to GL_TEXTURE_2D; measureText(), charWidth(), lineHeight()
 │   │   ├── UiShader.java      ← orthographic 2D shader wrapper
-│   │   └── UiRenderer.java    ← batched quad renderer; drawRect(), drawText(), drawCenteredText(), measureText()
+│   │   ├── UiRenderer.java    ← batched quad renderer; int-color + float-color overloads for drawRect/drawText
+│   │   ├── UiTheme.java       ← abstract base: named color fields + compound draw helpers (drawButton, drawPanel, etc.)
+│   │   ├── DarkTheme.java     ← default built-in dark theme
+│   │   └── LightTheme.java    ← built-in light theme
 │   ├── GameLoop.java          ← main loop; owns ScreenManager, launchWorld(), returnToMainMenu()
 │   ├── Camera.java
 │   ├── Window.java
@@ -93,11 +96,12 @@ src/main/java/com/voxelgame/
 │   └── BlockHighlightRenderer.java
 ├── game/                      ← server-side gameplay logic
 │   ├── screen/                ← Screen system
-│   │   ├── Screen.java        ← interface: render, onShow/Hide, input; isOverlay() default false
-│   │   ├── ScreenManager.java ← owns UiRenderer; setScreen(), isActiveScreenOverlay()
-│   │   ├── MainMenuScreen.java
-│   │   ├── WorldSelectScreen.java ← world list, create (name+seed), delete, launch
-│   │   └── PauseMenuScreen.java   ← overlay screen; Resume, Main Menu, Quit
+│   │   ├── Screen.java                ← interface: render(UiTheme,w,h), onShow/Hide, input; isOverlay() default false
+│   │   ├── ScreenManager.java         ← owns UiTheme (swappable); setTheme(), renderActiveScreen()
+│   │   ├── MainMenuScreen.java        ← Singleplayer / Multiplayer / Quit
+│   │   ├── WorldSelectScreen.java     ← world list, create, delete, launch; statusMessage for launch errors
+│   │   ├── PauseMenuScreen.java       ← overlay; Resume / Main Menu / Quit
+│   │   └── MultiplayerConnectScreen.java ← IP+port input, direct connect, cancelledFlag abort pattern
 │   ├── World.java
 │   ├── TerrainGenerator.java
 │   ├── ChunkMesher.java
@@ -175,6 +179,13 @@ are currently duplicated per screen. This will be consolidated into a `UiTheme` 
 in a future cleanup pass. When implementing new screens before that cleanup, follow the
 existing per-screen constant pattern — the theme refactor will sweep everything at once.
 
+### 11. UI Theme System
+`UiTheme` is an abstract class in `engine/ui/`. Subclasses set `protected int col*`
+fields (packed `0xRRGGBBAA`) and optionally override draw helpers. `ScreenManager`
+owns the active theme and exposes `setTheme(UiTheme)` — swapping themes requires no
+GL work. `ThemeRegistry` is deferred to Phase 7. All screens depend on `UiTheme`,
+never on `UiRenderer` directly. `Screen.render()` receives `UiTheme`, not `UiRenderer`.
+
 ## Development Phases
 - **Phase 0 (done):** Foundation — window, OpenGL context, game loop, triangle
 - **Phase 1 (done):** Chunk system, flat world, player movement
@@ -189,11 +200,12 @@ existing per-screen constant pattern — the theme refactor will sweep everythin
 - **6B (current):** Menu / UI System
   - **6B-1 (done):** UI rendering foundation — GlyphAtlas, UiShader, UiRenderer
   - **6B-2 (done):** Screen abstraction — Screen, ScreenManager, GameLoop wiring
-  - **6B-3 (done):** Main menu — Singleplayer / Multiplayer stub / Quit
+  - **6B-3 (done):** Main menu — Singleplayer / Multiplayer / Quit
   - **6B-4 (done):** World selection screen — list, create (name+seed), delete, launch
-  - **6B-5 (next):** Multiplayer connect screen — IP/port input, direct server connect
+  - **6B-5 (done):** Multiplayer connect screen — IP/port input, direct server connect
   - **6B-6 (done):** In-game pause menu — overlay, Resume / Main Menu / Quit
-  - **6B-7:** Settings stub
+  - **6B-7 (next):** Settings stub
+  - **6B-theme (done):** UI Theme system — UiTheme abstract class, DarkTheme, LightTheme
 - **6C:** Lighting + Day/Night Cycle — skylight propagation, block light foundation,
   sun cycle, ambient light.
 - **6D:** Entity System + Player Model — entity framework, skeletal player model,

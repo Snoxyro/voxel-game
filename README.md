@@ -140,10 +140,11 @@ decisions, and lessons learned — including honest notes on AI assistance.
   - [ ] 6B — Menu / UI System
     - [x] 6B-1 — UI rendering foundation (GlyphAtlas, UiShader, UiRenderer)
     - [x] 6B-2 — Screen abstraction (Screen, ScreenManager, GameLoop wiring)
-    - [x] 6B-3 — Main menu (Singleplayer / Multiplayer stub / Quit)
+    - [x] 6B-3 — Main menu (Singleplayer / Multiplayer / Quit)
     - [x] 6B-4 — World selection screen (list, create with seed, delete, launch)
-    - [ ] 6B-5 — Multiplayer connect screen
+    - [x] 6B-5 — Multiplayer connect screen (IP/port input, direct server connect)
     - [x] 6B-6 — In-game pause menu (overlay, Resume / Main Menu / Quit)
+    - [x] 6B-theme — UI Theme system (UiTheme, DarkTheme, LightTheme)
     - [ ] 6B-7 — Settings stub
   - [ ] 6C — Lighting + Day/Night Cycle
   - [ ] 6D — Entity System + Player Model

@@ -49,6 +49,8 @@ public class GameServer {
     /** Counts down once the Netty port is bound. Lets the game loop start on time. */
     private final CountDownLatch readyLatch = new CountDownLatch(1);
 
+    private volatile Throwable bindError = null; // set if the server fails to bind (e.g. port in use) — checked by #awaitReady()
+
     /** Set to false by {@link #stop()} to break the game loop. */
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -210,5 +212,18 @@ public class GameServer {
     public void onPlayerDisconnect(int playerId, String username) {
         System.out.printf("[Server] Player '%s' (id=%d) disconnected%n", username, playerId);
         serverWorld.removePlayer(playerId);
+    }
+
+    /**
+     * Returns the exception thrown during port bind, or {@code null} if the server
+     * started successfully. Check this after {@link #awaitReady()} returns.
+     */
+    public Throwable getBindError() {
+        return bindError;
+    }
+
+    /** Called by ServerNetworkManager on bind failure. Package-private. */
+    public void setBindError(Throwable e) {
+        this.bindError = e;
     }
 }

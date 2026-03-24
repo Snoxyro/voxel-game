@@ -228,6 +228,49 @@ public final class UiRenderer {
     }
 
     /**
+     * Returns the pixel height of a single line of text.
+     * Delegates to the glyph atlas cell height.
+     */
+    public int lineHeight() {
+        return glyphAtlas.lineHeight();
+    }
+
+    /**
+     * Draws a solid-colored rectangle using a packed RGBA color (0xRRGGBBAA).
+     * Convenience overload — unpacks to float channels and delegates to
+     * {@link #drawRect(float, float, float, float, float, float, float, float)}.
+     */
+    public void drawRect(float x, float y, float w, float h, int color) {
+        drawRect(x, y, w, h,
+            ((color >> 24) & 0xFF) / 255f,
+            ((color >> 16) & 0xFF) / 255f,
+            ((color >>  8) & 0xFF) / 255f,
+            (color        & 0xFF) / 255f);
+    }
+
+    /**
+     * Draws text using a packed RGBA color (0xRRGGBBAA).
+     */
+    public void drawText(float x, float y, String text, int color) {
+        drawText(x, y, text,
+            ((color >> 24) & 0xFF) / 255f,
+            ((color >> 16) & 0xFF) / 255f,
+            ((color >>  8) & 0xFF) / 255f,
+            (color        & 0xFF) / 255f);
+    }
+
+    /**
+     * Draws horizontally centered text using a packed RGBA color (0xRRGGBBAA).
+     */
+    public void drawCenteredText(float centerX, float y, String text, int color) {
+        drawCenteredText(centerX, y, text,
+            ((color >> 24) & 0xFF) / 255f,
+            ((color >> 16) & 0xFF) / 255f,
+            ((color >>  8) & 0xFF) / 255f,
+            (color        & 0xFF) / 255f);
+    }
+
+    /**
      * Draws text horizontally centered around {@code centerX}.
      * Prefer this over computing {@code leftX = centerX - measureText/2} manually
      * — it eliminates the centering formula from every caller.

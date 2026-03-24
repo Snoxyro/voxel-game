@@ -38,17 +38,21 @@ com.voxelgame.
 │   ├── ui/
 │   │   ├── GlyphAtlas.java    ← AWT font baked to GL texture; measureText(), charWidth(), lineHeight()
 │   │   ├── UiShader.java
-│   │   └── UiRenderer.java    ← drawRect(), drawText(), drawCenteredText(), measureText()
+│   │   ├── UiRenderer.java    ← drawRect(), drawText(), drawCenteredText(); float + int(0xRRGGBBAA) overloads
+│   │   ├── UiTheme.java       ← abstract; protected int col* fields + drawButton/drawPanel/drawInputField etc.
+│   │   ├── DarkTheme.java     ← default theme
+│   │   └── LightTheme.java    ← alternate theme
 │   ├── GameLoop.java          ← owns ScreenManager; launchWorld(), returnToMainMenu(), handleEscapeKey()
 │   ├── InputHandler.java      ← resetMouseDelta() — call after cursor recapture to prevent camera jump
 │   └── Camera, Window, ShaderProgram, Mesh, TextureManager, HudRenderer, BlockHighlightRenderer
 └── game/
     ├── screen/
-    │   ├── Screen.java        ← interface; isOverlay() default false
-    │   ├── ScreenManager.java ← setScreen(), hasActiveScreen(), isActiveScreenOverlay()
-    │   ├── MainMenuScreen.java
-    │   ├── WorldSelectScreen.java
-    │   └── PauseMenuScreen.java  ← isOverlay() = true
+    │   ├── Screen.java                   ← interface; render(UiTheme,w,h); isOverlay() default false
+    │   ├── ScreenManager.java            ← owns UiTheme; setTheme(), getTheme(), renderActiveScreen()
+    │   ├── MainMenuScreen.java           ← 3 callbacks: onSingleplayer, onMultiplayer, onQuit
+    │   ├── WorldSelectScreen.java        ← statusMessage field + setStatusMessage() for launch errors
+    │   ├── PauseMenuScreen.java          ← isOverlay() = true
+    │   └── MultiplayerConnectScreen.java ← ConnectHandler FI; cancelledFlag abort; connecting lock
     └── World, TerrainGenerator, ChunkMesher, Player, ChunkStorage
 ```
 
@@ -117,23 +121,21 @@ for the world-launch background thread to post GL-thread work.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 6 — Foundation for extensibility. Sub-phase 6B in progress.
+Phase 6 — Foundation for extensibility. Sub-phase 6B nearly complete.
 
 ### Phase 6 status
-- 6A done: Block Registry — BlockType, BlockRegistry, Blocks; Chunk uses registry IDs
-- 6B-1 done: UI rendering foundation — GlyphAtlas, UiShader, UiRenderer
-- 6B-2 done: Screen abstraction — Screen, ScreenManager, GameLoop wiring
-- 6B-3 done: Main menu — Singleplayer / Multiplayer stub / Quit
-- 6B-4 done: World selection screen — list, create (name + seed), delete, launch
-- 6B-5 next: Multiplayer connect screen — IP/port text input, direct server connect
-- 6B-6 done: Pause menu — overlay screen; Resume, Main Menu, Quit
-- 6B-7 pending: Settings stub
+- 6A done: Block Registry
+- 6B-theme done: UiTheme abstract class, DarkTheme, LightTheme; Screen.render() takes UiTheme
+- 6B-1 through 6B-6 done: full UI screen system
+- 6B-5 done: MultiplayerConnectScreen — real server connect, cancelledFlag abort, friendly errors
+- 6B-7 next: Settings stub
+- TODO first in next session: fix chunk loading wave pattern (see DEVLOG Entry 042)
 
 ### After 6B
 - 6C: Lighting + Day/Night Cycle
 - 6D: Entity System + Player Model
 - 6E: Items + Inventory
-- Phase 7: Modding API (requires all of 6A–6E as foundations)
+- Phase 7: Modding API
 
 ## Key Constraints
 - Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`
@@ -152,6 +154,8 @@ Phase 6 — Foundation for extensibility. Sub-phase 6B in progress.
   free cursor traveled while the menu was open.
 - Button/title text centering must use `r.measureText()` — hardcoded `length * N`
   values are always wrong for proportional or atlas-based fonts.
+- Screen.render() takes UiTheme, not UiRenderer — never add UiRenderer as a screen parameter
+- All colors in themes are packed 0xRRGGBBAA ints — never use float r,g,b,a in screen code
 
 ## What NOT to Do
 - Do not suggest switching to Maven

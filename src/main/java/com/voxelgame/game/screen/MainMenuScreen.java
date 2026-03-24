@@ -1,7 +1,6 @@
 package com.voxelgame.game.screen;
 
-import com.voxelgame.engine.ui.GlyphAtlas;
-import com.voxelgame.engine.ui.UiRenderer;
+import com.voxelgame.engine.ui.UiTheme;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -33,22 +32,9 @@ public class MainMenuScreen implements Screen {
     @SuppressWarnings("unused")
     private static final int TITLE_SIZE  = 2;   // glyph scale multiplier (not used yet — reserved)
 
-    // Panel background color — dark, semi-transparent Minecraft-style
-    private static final float PANEL_R = 0.10f, PANEL_G = 0.10f, PANEL_B = 0.10f, PANEL_A = 0.85f;
-
-    // Button colors
-    private static final float BTN_R     = 0.25f, BTN_G = 0.25f, BTN_B = 0.25f, BTN_A = 1.0f;
-    @SuppressWarnings("unused")
-    private static final float BTN_HOV_R = 0.40f, BTN_HOV_G = 0.40f, BTN_HOV_B = 0.40f, BTN_HOV_A = 1.0f;
-    private static final float BTN_TXT_R = 1.00f, BTN_TXT_G = 1.00f, BTN_TXT_B = 1.00f, BTN_TXT_A = 1.0f;
-
-    // Title color — slightly yellow-tinted like Minecraft's title
-    private static final float TITLE_R = 1.0f, TITLE_G = 0.85f, TITLE_B = 0.30f, TITLE_A = 1.0f;
-
-    // -------------------------------------------------------------------------
-
     private final ScreenManager screenManager;
     private final Runnable       onEnterGame; // called when Singleplayer is clicked
+    private final Runnable       onMultiplayer; // called when Multiplayer is clicked
     private final Runnable       onQuit;      // called when Quit is clicked
 
     /** Current mouse cursor position — updated every render frame. */
@@ -61,12 +47,15 @@ public class MainMenuScreen implements Screen {
      * @param screenManager the active screen manager — used to dismiss this screen
      * @param onEnterGame   callback invoked when the player clicks Singleplayer;
      *                      should recapture the cursor and start the game
+     * @param onMultiplayer callback invoked when the player clicks Multiplayer;
+     *                      should navigate to the multiplayer connect screen
      * @param onQuit        callback invoked when the player clicks Quit;
      *                      should close the GLFW window
      */
-    public MainMenuScreen(ScreenManager screenManager, Runnable onEnterGame, Runnable onQuit) {
+    public MainMenuScreen(ScreenManager screenManager, Runnable onEnterGame, Runnable onMultiplayer, Runnable onQuit) {
         this.screenManager = screenManager;
         this.onEnterGame   = onEnterGame;
+        this.onMultiplayer = onMultiplayer;
         this.onQuit        = onQuit;
     }
 
@@ -89,7 +78,7 @@ public class MainMenuScreen implements Screen {
     // -------------------------------------------------------------------------
 
     @Override
-    public void render(UiRenderer r, int sw, int sh) {
+    public void render(UiTheme theme, int sw, int sh) {
         // --- Poll cursor position each frame for hover detection ---
         // We read this here rather than in onMouseClick so hover highlights
         // update smoothly as the cursor moves.
@@ -110,37 +99,20 @@ public class MainMenuScreen implements Screen {
         int btn3Y = btn2Y + BUTTON_H + BUTTON_GAP;
 
         // --- Background panel ---
-        r.drawRect(panelX, panelY, PANEL_W, PANEL_H, PANEL_R, PANEL_G, PANEL_B, PANEL_A);
+        theme.drawPanel(panelX, panelY, PANEL_W, PANEL_H);
 
         // --- Title — centered in the panel using the correct measured width ---
         String title  = "VOXEL GAME";
         int    titleY = panelY + 28;
-        r.drawCenteredText(panelX + PANEL_W / 2.0f, titleY, title, TITLE_R, TITLE_G, TITLE_B, TITLE_A);
+        theme.drawTitle(panelX + PANEL_W / 2.0f, titleY, title);
 
         // --- Buttons ---
-        drawButton(r, btnX, btn1Y, BUTTON_W, BUTTON_H, "Singleplayer");
-        drawButton(r, btnX, btn2Y, BUTTON_W, BUTTON_H, "Multiplayer");
-        drawButton(r, btnX, btn3Y, BUTTON_W, BUTTON_H, "Quit");
-    }
-
-    /**
-     * Draws a single button, highlighted if the cursor is hovering over it.
-     * Text is centered using the atlas's actual measured glyph widths.
-     */
-    private void drawButton(UiRenderer r, int x, int y, int w, int h, String label) {
-        boolean hovered = mouseX >= x && mouseX <= x + w
-                       && mouseY >= y && mouseY <= y + h;
-
-        r.drawRect(x, y, w, h,
-            hovered ? BTN_HOV_R : BTN_R,
-            hovered ? BTN_HOV_G : BTN_G,
-            hovered ? BTN_HOV_B : BTN_B,
-            BTN_A);
-
-        // Use r.measureText() — GlyphAtlas.CELL_W is the line height for vertical centering
-        int textX = x + (w - r.measureText(label)) / 2;
-        int textY = y + (h - GlyphAtlas.CELL_H) / 2;
-        r.drawText(textX, textY, label, BTN_TXT_R, BTN_TXT_G, BTN_TXT_B, BTN_TXT_A);
+        theme.drawButton(btnX, btn1Y, BUTTON_W, BUTTON_H, "Singleplayer",
+            hits(mouseX, mouseY, btnX, btn1Y, BUTTON_W, BUTTON_H));
+        theme.drawButton(btnX, btn2Y, BUTTON_W, BUTTON_H, "Multiplayer",
+            hits(mouseX, mouseY, btnX, btn2Y, BUTTON_W, BUTTON_H));
+        theme.drawButton(btnX, btn3Y, BUTTON_W, BUTTON_H, "Quit",
+            hits(mouseX, mouseY, btnX, btn3Y, BUTTON_W, BUTTON_H));
     }
 
     // -------------------------------------------------------------------------
@@ -165,8 +137,7 @@ public class MainMenuScreen implements Screen {
             screenManager.setScreen(null);
             onEnterGame.run();
         } else if (hits(x, y, btnX, btn2Y, BUTTON_W, BUTTON_H)) {
-            // Multiplayer — stub until 6B-5
-            System.out.println("[UI] Multiplayer — not yet implemented.");
+            onMultiplayer.run();
         } else if (hits(x, y, btnX, btn3Y, BUTTON_W, BUTTON_H)) {
             onQuit.run();
         }

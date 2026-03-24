@@ -1,7 +1,6 @@
 package com.voxelgame.game.screen;
 
-import com.voxelgame.engine.ui.GlyphAtlas;
-import com.voxelgame.engine.ui.UiRenderer;
+import com.voxelgame.engine.ui.UiTheme;
 import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
@@ -46,6 +45,7 @@ public class WorldSelectScreen implements Screen {
     /** Vertical gap between list items. */
     private static final int ITEM_GAP  = 4;
     /** Horizontal text padding inside a list item. */
+    @SuppressWarnings("unused")
     private static final int ITEM_PAD  = 8;
     /** Maximum number of worlds displayed without scrolling. */
     private static final int MAX_ITEMS = 6;
@@ -59,34 +59,6 @@ public class WorldSelectScreen implements Screen {
 
     /** Caret switches between visible and hidden every this many seconds. */
     private static final float CARET_BLINK_INTERVAL = 0.5f;
-
-    // Panel
-    private static final float PANEL_R  = 0.10f, PANEL_G  = 0.10f, PANEL_B  = 0.10f, PANEL_A  = 0.88f;
-
-    // List item — unselected, selected (green tint), hovered
-    @SuppressWarnings("unused")
-    private static final float ITEM_R   = 0.18f, ITEM_G   = 0.18f, ITEM_B   = 0.18f, ITEM_A   = 1.0f;
-    @SuppressWarnings("unused")
-    private static final float ISEL_R   = 0.22f, ISEL_G   = 0.42f, ISEL_B   = 0.22f, ISEL_A   = 1.0f;
-    @SuppressWarnings("unused")
-    private static final float IHOV_R   = 0.23f, IHOV_G   = 0.23f, IHOV_B   = 0.23f, IHOV_A   = 1.0f;
-
-    // Buttons
-    private static final float BTN_R    = 0.25f, BTN_G    = 0.25f, BTN_B    = 0.25f, BTN_A    = 1.0f;
-    @SuppressWarnings("unused")
-    private static final float BHOV_R   = 0.40f, BHOV_G   = 0.40f, BHOV_B   = 0.40f, BHOV_A   = 1.0f;
-    @SuppressWarnings("unused")
-    private static final float BDIS_R   = 0.18f, BDIS_G   = 0.18f, BDIS_B   = 0.18f, BDIS_A   = 1.0f;
-
-    // Text
-    private static final float TXT_R    = 1.00f, TXT_G    = 1.00f, TXT_B    = 1.00f, TXT_A    = 1.0f;
-    private static final float TITLE_R  = 1.00f, TITLE_G  = 0.85f, TITLE_B  = 0.30f, TITLE_A  = 1.0f;
-    private static final float DIM_R    = 0.55f, DIM_G    = 0.55f, DIM_B    = 0.55f;
-    private static final float WARN_R   = 1.00f, WARN_G   = 0.30f, WARN_B   = 0.30f;
-
-    // Input field border / background
-    private static final float IBORD_R  = 0.50f, IBORD_G  = 0.50f, IBORD_B  = 0.50f, IBORD_A  = 1.0f;
-    private static final float IBG_R    = 0.12f, IBG_G    = 0.12f, IBG_B    = 0.12f, IBG_A    = 1.0f;
 
     // -------------------------------------------------------------------------
     // State
@@ -102,17 +74,18 @@ public class WorldSelectScreen implements Screen {
     private int          selectedIndex = -1;         // -1 = nothing selected
     private String       newWorldName  = "";         // text input buffer
     private String       newWorldSeed = "";
+    private String       statusMessage = "";
 
     /** Current mouse cursor position — polled each render frame. */
     private int mouseX, mouseY;
 
     /**
      * Cached single-character pixel width from the last render frame.
-     * Set in renderCreate() via r.measureText("X") — guarantees the same
+        * Set in renderCreate() via theme.measureText("X") — guarantees the same
      * width used for rendering is used for mouse→caret calculations.
-     * Defaults to GlyphAtlas.CELL_W until the first render frame fires.
+        * Defaults to 16px until the first render frame fires.
      */
-    private int charPixelWidth = GlyphAtlas.CELL_W;
+    private int charPixelWidth = 16;
 
     /** Accumulated time in seconds for caret blink timing. */
     private float caretBlinkTimer  = 0f;
@@ -147,6 +120,7 @@ public class WorldSelectScreen implements Screen {
         mode            = Mode.LIST;
         newWorldName    = "";
         newWorldSeed    = "";
+        statusMessage    = "";
         nameCaretPos    = 0;
         seedCaretPos    = 0;
         seedFieldActive = false;
@@ -164,7 +138,7 @@ public class WorldSelectScreen implements Screen {
     // -------------------------------------------------------------------------
 
     @Override
-    public void render(UiRenderer r, int sw, int sh) {
+    public void render(UiTheme theme, int sw, int sh) {
         double[] cx = {0}, cy = {0};
         GLFW.glfwGetCursorPos(GLFW.glfwGetCurrentContext(), cx, cy);
         mouseX = (int) cx[0];
@@ -174,43 +148,34 @@ public class WorldSelectScreen implements Screen {
         int panelY = (sh - PANEL_H) / 2;
 
         // Background
-        r.drawRect(panelX, panelY, PANEL_W, PANEL_H, PANEL_R, PANEL_G, PANEL_B, PANEL_A);
+        theme.drawPanel(panelX, panelY, PANEL_W, PANEL_H);
 
         // Title — centered in panel
         String title = "SELECT WORLD";
-        int titleX = panelX + (PANEL_W - r.measureText(title)) / 2;
-        r.drawText(titleX, panelY + 14, title, TITLE_R, TITLE_G, TITLE_B, TITLE_A);
+        theme.drawTitle(panelX + PANEL_W / 2.0f, panelY + 14, title);
 
         switch (mode) {
-            case LIST           -> renderList(r, panelX, panelY);
-            case CREATE_NEW     -> renderCreate(r, panelX, panelY);
-            case CONFIRM_DELETE -> renderDelete(r, panelX, panelY);
-            case LAUNCHING      -> renderLaunching(r, panelX, panelY);
+            case LIST           -> renderList(theme, panelX, panelY);
+            case CREATE_NEW     -> renderCreate(theme, panelX, panelY);
+            case CONFIRM_DELETE -> renderDelete(theme, panelX, panelY);
+            case LAUNCHING      -> renderLaunching(theme, panelX, panelY);
         }
     }
 
-    private void renderList(UiRenderer r, int panelX, int panelY) {
+    private void renderList(UiTheme theme, int panelX, int panelY) {
         int listX  = panelX + 16;
         int listW  = PANEL_W - 32;
         int listY0 = panelY + 52;
 
         if (worldNames.isEmpty()) {
-            r.drawText(listX, listY0 + 10,
-                "No worlds found. Click \"New World\" to create one.",
-                DIM_R, DIM_G, DIM_B, 1.0f);
+            theme.drawDimLabel(listX, listY0 + 10,
+                "No worlds found. Click \"New World\" to create one.");
         } else {
             for (int i = 0; i < Math.min(worldNames.size(), MAX_ITEMS); i++) {
                 int     itemY    = listY0 + i * (ITEM_H + ITEM_GAP);
                 boolean selected = i == selectedIndex;
                 boolean hovered  = !selected && hits(mouseX, mouseY, listX, itemY, listW, ITEM_H);
-
-                float br, bg, bb;
-                if      (selected) { br = ISEL_R; bg = ISEL_G; bb = ISEL_B; }
-                else if (hovered)  { br = IHOV_R; bg = IHOV_G; bb = IHOV_B; }
-                else               { br = ITEM_R; bg = ITEM_G; bb = ITEM_B; }
-                r.drawRect(listX, itemY, listW, ITEM_H, br, bg, bb, 1.0f);
-                r.drawText(listX + ITEM_PAD, itemY + ITEM_PAD,
-                    worldNames.get(i), TXT_R, TXT_G, TXT_B, TXT_A);
+                theme.drawListItem(listX, itemY, listW, ITEM_H, worldNames.get(i), selected, hovered);
             }
         }
 
@@ -220,16 +185,24 @@ public class WorldSelectScreen implements Screen {
         int row1Y   = panelY + PANEL_H - (BTN_H * 2) - BTN_GAP - 16;
         int row2Y   = row1Y + BTN_H + BTN_GAP;
 
-        drawButton(r, "Play",      btnRowX,                  row1Y, btnW, BTN_H, selectedIndex >= 0);
-        drawButton(r, "New World", btnRowX + btnW + BTN_GAP, row1Y, btnW, BTN_H, true);
-        drawButton(r, "Delete",    btnRowX,                  row2Y, btnW, BTN_H, selectedIndex >= 0);
-        drawButton(r, "Back",      btnRowX + btnW + BTN_GAP, row2Y, btnW, BTN_H, true);
+        theme.drawButton(btnRowX, row1Y, btnW, BTN_H, "Play",
+            hits(mouseX, mouseY, btnRowX, row1Y, btnW, BTN_H), selectedIndex >= 0);
+        theme.drawButton(btnRowX + btnW + BTN_GAP, row1Y, btnW, BTN_H, "New World",
+            hits(mouseX, mouseY, btnRowX + btnW + BTN_GAP, row1Y, btnW, BTN_H), true);
+        if (selectedIndex >= 0) {
+            theme.drawDangerButton(btnRowX, row2Y, btnW, BTN_H, "Delete",
+                hits(mouseX, mouseY, btnRowX, row2Y, btnW, BTN_H));
+        } else {
+            theme.drawButton(btnRowX, row2Y, btnW, BTN_H, "Delete", false, false);
+        }
+        theme.drawButton(btnRowX + btnW + BTN_GAP, row2Y, btnW, BTN_H, "Back",
+            hits(mouseX, mouseY, btnRowX + btnW + BTN_GAP, row2Y, btnW, BTN_H));
     }
 
-    private void renderCreate(UiRenderer r, int panelX, int panelY) {
+    private void renderCreate(UiTheme theme, int panelX, int panelY) {
         nameCaretPos = Math.min(nameCaretPos, newWorldName.length());
         seedCaretPos = Math.min(seedCaretPos, newWorldSeed.length());
-        charPixelWidth = r.measureText("X");
+        charPixelWidth = theme.measureText("X");
 
         // Advance blink timer — getDeltaTime() not available here, so we approximate
         // using a fixed frame budget. At ~60 FPS each frame is ~16ms = 0.016s.
@@ -247,71 +220,63 @@ public class WorldSelectScreen implements Screen {
         // --- World Name ---
         int nameLabelY = panelY + 60;
         int nameFieldY = nameLabelY + 20;
-        r.drawText(fieldX, nameLabelY, "World Name:", TXT_R, TXT_G, TXT_B, TXT_A);
-
-        float nameBr = seedFieldActive ? IBORD_R * 0.5f : IBORD_R;
-        r.drawRect(fieldX - 1, nameFieldY - 1, fieldW + 2, fieldH + 2,
-            nameBr, IBORD_G * (seedFieldActive ? 0.5f : 1f), IBORD_B * (seedFieldActive ? 0.5f : 1f), IBORD_A);
-        r.drawRect(fieldX, nameFieldY, fieldW, fieldH, IBG_R, IBG_G, IBG_B, IBG_A);
-        r.drawText(fieldX + 8, nameFieldY + 8, newWorldName, TXT_R, TXT_G, TXT_B, TXT_A);
-
-        // Thin caret — 2px wide rect drawn between characters, not inside the string
-        if (!seedFieldActive && caretVisible) {
-            int caretX = fieldX + 8 + nameCaretPos * charPixelWidth;
-            r.drawRect(caretX, nameFieldY + 4, 2, fieldH - 8, TXT_R, TXT_G, TXT_B, TXT_A);
-        }
+        theme.drawLabel(fieldX, nameLabelY, "World Name:");
+        theme.drawInputField(fieldX, nameFieldY, fieldW, fieldH,
+            newWorldName, nameCaretPos, !seedFieldActive, caretVisible);
 
         // --- Seed ---
         int seedLabelY = nameFieldY + fieldH + 16;
         int seedFieldY = seedLabelY + 20;
-        r.drawText(fieldX, seedLabelY,
-            "Seed (optional — leave blank for random):", DIM_R, DIM_G, DIM_B, 1.0f);
+        theme.drawDimLabel(fieldX, seedLabelY,
+            "Seed (optional — leave blank for random):");
+        theme.drawInputField(fieldX, seedFieldY, fieldW, fieldH,
+            newWorldSeed, seedCaretPos, seedFieldActive, caretVisible);
 
-        float seedBr = seedFieldActive ? IBORD_R : IBORD_R * 0.5f;
-        r.drawRect(fieldX - 1, seedFieldY - 1, fieldW + 2, fieldH + 2,
-            seedBr, IBORD_G * (seedFieldActive ? 1f : 0.5f), IBORD_B * (seedFieldActive ? 1f : 0.5f), IBORD_A);
-        r.drawRect(fieldX, seedFieldY, fieldW, fieldH, IBG_R, IBG_G, IBG_B, IBG_A);
-        r.drawText(fieldX + 8, seedFieldY + 8, newWorldSeed, TXT_R, TXT_G, TXT_B, TXT_A);
-
-        if (seedFieldActive && caretVisible) {
-            int caretX = fieldX + 8 + seedCaretPos * charPixelWidth;
-            r.drawRect(caretX, seedFieldY + 4, 2, fieldH - 8, TXT_R, TXT_G, TXT_B, TXT_A);
-        }
-
-        r.drawText(fieldX, seedFieldY + fieldH + 6,
-            "Numbers only. Negative numbers allowed.", DIM_R, DIM_G, DIM_B, 1.0f);
+        theme.drawDimLabel(fieldX, seedFieldY + fieldH + 6,
+            "Numbers only. Negative numbers allowed.");
 
         // --- Buttons ---
         int twoW  = 2 * BTN_W + BTN_GAP;
         int btn1X = panelX + (PANEL_W - twoW) / 2;
         int btn2X = btn1X + BTN_W + BTN_GAP;
         int btnY  = panelY + PANEL_H - BTN_H - 16;
-        drawButton(r, "Create", btn1X, btnY, BTN_W, BTN_H, !newWorldName.isEmpty());
-        drawButton(r, "Cancel", btn2X, btnY, BTN_W, BTN_H, true);
+        theme.drawButton(btn1X, btnY, BTN_W, BTN_H, "Create",
+            hits(mouseX, mouseY, btn1X, btnY, BTN_W, BTN_H), !newWorldName.isEmpty());
+        theme.drawButton(btn2X, btnY, BTN_W, BTN_H, "Cancel",
+            hits(mouseX, mouseY, btn2X, btnY, BTN_W, BTN_H));
     }
 
-    private void renderDelete(UiRenderer r, int panelX, int panelY) {
+    private void renderDelete(UiTheme theme, int panelX, int panelY) {
         String name = selectedIndex >= 0 ? worldNames.get(selectedIndex) : "?";
 
         int midY = panelY + PANEL_H / 2 - 40;
-        r.drawText(panelX + 16, midY, "Delete this world?", WARN_R, WARN_G, WARN_B, 1.0f);
-        r.drawText(panelX + 16, midY + 24, name, TXT_R, TXT_G, TXT_B, TXT_A);
-        r.drawText(panelX + 16, midY + 50, "This cannot be undone.", WARN_R, WARN_G, WARN_B, 1.0f);
+        theme.drawWarnLabel(panelX + 16, midY, "Delete this world?");
+        theme.drawLabel(panelX + 16, midY + 24, name);
+        theme.drawWarnLabel(panelX + 16, midY + 50, "This cannot be undone.");
 
         int twoW  = 2 * BTN_W + BTN_GAP;
         int btn1X = panelX + (PANEL_W - twoW) / 2;
         int btn2X = btn1X + BTN_W + BTN_GAP;
         int btnY  = panelY + PANEL_H - BTN_H - 16;
 
-        drawButton(r, "Delete", btn1X, btnY, BTN_W, BTN_H, true);
-        drawButton(r, "Cancel", btn2X, btnY, BTN_W, BTN_H, true);
+        theme.drawDangerButton(btn1X, btnY, BTN_W, BTN_H, "Delete",
+            hits(mouseX, mouseY, btn1X, btnY, BTN_W, BTN_H));
+        theme.drawButton(btn2X, btnY, BTN_W, BTN_H, "Cancel",
+            hits(mouseX, mouseY, btn2X, btnY, BTN_W, BTN_H));
     }
 
-    private void renderLaunching(UiRenderer r, int panelX, int panelY) {
-        String msg = "Starting world...";
-        int msgX = panelX + (PANEL_W - msg.length() * 16) / 2;
-        int msgY = panelY + PANEL_H / 2 - 8;
-        r.drawText(msgX, msgY, msg, TXT_R, TXT_G, TXT_B, TXT_A);
+    private void renderLaunching(UiTheme theme, int panelX, int panelY) {
+        if (!statusMessage.isEmpty()) {
+            // Launch failed — show error and a Back button
+            theme.drawWarnLabel(panelX + 16, panelY + PANEL_H / 2 - 20, statusMessage);
+            int btnX = panelX + (PANEL_W - 200) / 2;
+            int btnY = panelY + PANEL_H / 2 + 10;
+            theme.drawButton(btnX, btnY, 200, 36, "Back to Menu",
+                hits(mouseX, mouseY, btnX, btnY, 200, 36), true);
+            // Also handle the click in onMouseClick for the LAUNCHING mode
+        } else {
+            theme.drawDimLabel(panelX + 16, panelY + PANEL_H / 2, "Launching...");
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -329,7 +294,15 @@ public class WorldSelectScreen implements Screen {
             case LIST           -> handleListClick(x, y, panelX, panelY);
             case CREATE_NEW     -> handleCreateClick(x, y, panelX, panelY);
             case CONFIRM_DELETE -> handleDeleteClick(x, y, panelX, panelY);
-            case LAUNCHING      -> { /* block all input while server starts */ }
+            case LAUNCHING -> {
+                if (!statusMessage.isEmpty()) {
+                    int btnX = panelX + (PANEL_W - 200) / 2;
+                    int btnY = panelY + PANEL_H / 2 + 10;
+                    if (hits(x, y, btnX, btnY, 200, 36)) {
+                        onBack.run();
+                    }
+                }
+            }
         }
     }
 
@@ -621,36 +594,6 @@ public class WorldSelectScreen implements Screen {
         Files.delete(dir);
     }
 
-    // -------------------------------------------------------------------------
-    // Draw helpers
-    // -------------------------------------------------------------------------
-
-    /**
-     * Draws a button rectangle. When disabled the button is greyed out and
-     * the hover highlight is suppressed. Label is centered inside the button.
-     *
-     * @param enabled false draws the button as non-interactive
-     */
-    private void drawButton(UiRenderer r, String label, int x, int y, int w, int h, boolean enabled) {
-        float br, bg, bb;
-        if (!enabled) {
-            br = BDIS_R; bg = BDIS_G; bb = BDIS_B;
-        } else if (hits(mouseX, mouseY, x, y, w, h)) {
-            br = BHOV_R; bg = BHOV_G; bb = BHOV_B;
-        } else {
-            br = BTN_R; bg = BTN_G; bb = BTN_B;
-        }
-        r.drawRect(x, y, w, h, br, bg, bb, BTN_A);
-
-        float tr = enabled ? TXT_R : DIM_R;
-        float tg = enabled ? TXT_G : DIM_G;
-        float tb = enabled ? TXT_B : DIM_B;
-        // r.measureText() gives the correct pixel width — no magic multipliers
-        int tx = x + (w - r.measureText(label)) / 2;
-        int ty = y + (h - GlyphAtlas.CELL_H) / 2;
-        r.drawText(tx, ty, label, tr, tg, tb, TXT_A);
-    }
-
     private boolean hits(int px, int py, int x, int y, int w, int h) {
         return px >= x && px <= x + w && py >= y && py <= y + h;
     }
@@ -665,5 +608,9 @@ public class WorldSelectScreen implements Screen {
         int[] w = {0}, h = {0};
         GLFW.glfwGetFramebufferSize(GLFW.glfwGetCurrentContext(), w, h);
         return h[0];
+    }
+
+    public void setStatusMessage(String message) {
+        this.statusMessage = message;
     }
 }

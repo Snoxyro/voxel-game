@@ -104,8 +104,14 @@ public class ServerNetworkManager {
                     }
                 });
 
-            serverChannel = bootstrap.bind(port).sync().channel();
-            System.out.println("[Server] Listening on port " + port);
+            try {
+                serverChannel = bootstrap.bind(port).sync().channel();
+                System.out.println("[Server] Listening on port " + port);
+            } catch (Exception e) {
+                server.setBindError(e); // store the error before counting down
+                readyLatch.countDown(); // unblock awaitReady() so launchWorld() can handle it
+                return;
+            }
 
             // Signal to Main / GameServer that the port is bound and we're accepting connections
             readyLatch.countDown();

@@ -1,26 +1,34 @@
 package com.voxelgame.game.screen;
 
 import com.voxelgame.engine.GameLoop;
+import com.voxelgame.engine.ui.DarkTheme;
 import com.voxelgame.engine.ui.GlyphAtlas;
 import com.voxelgame.engine.ui.UiRenderer;
 import com.voxelgame.engine.ui.UiShader;
+import com.voxelgame.engine.ui.UiTheme;
 
 /**
- * Manages the currently active {@link Screen}.
+ * Manages the currently active {@link Screen} and the active {@link UiTheme}.
  *
  * <p>At most one screen is active at a time. When no screen is active
  * ({@link #hasActiveScreen()} returns false), the game runs normally.
  * When a screen is active, {@link GameLoop} skips game update/render and
  * calls {@link #renderActiveScreen} instead.
  *
- * <p>The {@link UiRenderer} and its dependencies are owned here — they are
- * created once and shared across all screens for the lifetime of the session.
+ * <p>The GL resources ({@link UiShader}, {@link GlyphAtlas}, {@link UiRenderer})
+ * are owned here and shared for the entire session. The active {@link UiTheme}
+ * wraps the renderer and is swappable at runtime — switching themes is a single
+ * reference change with no GL work.
  */
 public final class ScreenManager {
 
+    // GL resources — owned here, freed in cleanup()
     private final UiShader   uiShader;
     private final GlyphAtlas glyphAtlas;
     private final UiRenderer uiRenderer;
+
+    // The active theme — swappable via setTheme(). DarkTheme is the default.
+    private UiTheme activeTheme;
 
     private Screen activeScreen = null;
 
@@ -29,14 +37,31 @@ public final class ScreenManager {
      * Must be called on the main (GL) thread.
      */
     public ScreenManager() {
-        uiShader   = new UiShader();
-        glyphAtlas = new GlyphAtlas();
-        uiRenderer = new UiRenderer(uiShader, glyphAtlas);
+        uiShader    = new UiShader();
+        glyphAtlas  = new GlyphAtlas();
+        uiRenderer  = new UiRenderer(uiShader, glyphAtlas);
+        activeTheme = new DarkTheme(uiRenderer); // default theme
     }
 
-    // -------------------------------------------------------------------------
-    // Screen lifecycle
-    // -------------------------------------------------------------------------
+    // ── Theme management ──────────────────────────────────────────────────────
+
+    /**
+     * Replaces the active theme. Takes effect on the next rendered frame.
+     * The renderer is shared — only the color data and draw behavior change.
+     *
+     * @param theme the new theme to activate; must not be null
+     */
+    public void setTheme(UiTheme theme) {
+        if (theme == null) throw new IllegalArgumentException("theme must not be null");
+        this.activeTheme = theme;
+    }
+
+    /** Returns the currently active theme. */
+    public UiTheme getTheme() {
+        return activeTheme;
+    }
+
+    // ── Screen lifecycle ──────────────────────────────────────────────────────
 
     /**
      * Sets the active screen, calling {@link Screen#onHide()} on the previous
@@ -64,32 +89,11 @@ public final class ScreenManager {
         return activeScreen != null && activeScreen.isOverlay();
     }
 
-    // -------------------------------------------------------------------------
-    // Per-frame rendering — called by GameLoop when hasActiveScreen() is true
-    // -------------------------------------------------------------------------
-
-    /**
-     * Renders the active screen for this frame.
-     * Must be called on the main (GL) thread.
-     *
-     * @param screenWidth  current framebuffer width in pixels
-     * @param screenHeight current framebuffer height in pixels
-     */
-    public void renderActiveScreen(int screenWidth, int screenHeight) {
-        if (activeScreen == null) return;
-
-        uiRenderer.begin(screenWidth, screenHeight);
-        activeScreen.render(uiRenderer, screenWidth, screenHeight);
-        uiRenderer.end();
-    }
-
-    // -------------------------------------------------------------------------
-    // Input forwarding — called by GameLoop's input callbacks
-    // -------------------------------------------------------------------------
+    // ── Per-frame input forwarding ─────────────────────────────────────────────
 
     /**
      * Forwards a mouse click to the active screen.
-     * Returns true if the event was consumed (a screen was active).
+     * @return true if the screen consumed the event
      */
     public boolean onMouseClick(int x, int y, int button) {
         if (activeScreen == null) return false;
@@ -99,7 +103,7 @@ public final class ScreenManager {
 
     /**
      * Forwards a key press to the active screen.
-     * Returns true if the event was consumed.
+     * @return true if the screen consumed the event
      */
     public boolean onKeyPress(int key, int mods) {
         if (activeScreen == null) return false;
@@ -109,7 +113,7 @@ public final class ScreenManager {
 
     /**
      * Forwards a typed character to the active screen.
-     * Returns true if the event was consumed.
+     * @return true if the screen consumed the event
      */
     public boolean onCharTyped(char c) {
         if (activeScreen == null) return false;
@@ -117,20 +121,29 @@ public final class ScreenManager {
         return true;
     }
 
-    // -------------------------------------------------------------------------
+    // ── Per-frame rendering ───────────────────────────────────────────────────
 
     /**
-     * Exposes the {@link UiRenderer} for screens that need to draw outside the
-     * normal render pass (e.g. the in-game HUD, which runs alongside the world).
+     * Renders the active screen for this frame using the active theme.
+     * Must be called on the main (GL) thread.
+     *
+     * @param screenW framebuffer width in pixels
+     * @param screenH framebuffer height in pixels
      */
-    public UiRenderer getUiRenderer() { return uiRenderer; }
+    public void renderActiveScreen(int screenW, int screenH) {
+        if (activeScreen == null) return;
+        activeTheme.begin(screenW, screenH);
+        activeScreen.render(activeTheme, screenW, screenH);
+        activeTheme.end();
+    }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
 
     /**
-     * Releases all UI rendering resources.
-     * Must be called on the main (GL) thread during shutdown.
+     * Frees all GL resources. Must be called on the main (GL) thread during shutdown.
      */
     public void cleanup() {
-        uiRenderer.cleanup(); // also cleans up glyphAtlas
+        uiRenderer.cleanup(); // also cleans up glyphAtlas inside
         uiShader.cleanup();
     }
 }

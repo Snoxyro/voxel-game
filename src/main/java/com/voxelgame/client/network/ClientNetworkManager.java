@@ -28,6 +28,7 @@ import io.netty.handler.codec.LengthFieldPrepender;
 public class ClientNetworkManager {
 
     private static final int MAX_FRAME_BYTES = 1 << 20; // 1 MB
+    private static final int CONNECT_TIMEOUT_MS = 5_000;
 
     private final String      host;
     private final int         port;
@@ -66,6 +67,7 @@ public class ClientNetworkManager {
             .group(group)
             .channel(NioSocketChannel.class)
             .option(ChannelOption.TCP_NODELAY, true)
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS)
             .handler(new ChannelInitializer<SocketChannel>() {
                 @Override
                 protected void initChannel(SocketChannel ch) {
