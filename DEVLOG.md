@@ -2266,6 +2266,195 @@ listeners. Has something meaningful to offer because the game underneath it is b
 
 ---
 
+## Entry 040 — Phase 6B-4: World Selection Screen
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility
+
+### What Was Done
+- Created `WorldSelectScreen.java` in `game/screen/` — full world management UI.
+  Scans `worlds/` for directories containing `world.dat`. Displays up to 6 worlds
+  in a scrollable list. Four actions: Play (launch selected), New World (create),
+  Delete (with confirmation prompt), Back (return to main menu).
+- World creation accepts a name (letters/digits/hyphens/underscores, max 32 chars)
+  and an optional seed (numeric, max 20 chars). Blank seed = random. Seed is passed
+  through to `WorldMeta.loadOrCreate(Path, long)` on new worlds; existing worlds
+  always keep their stored seed.
+- Added `WorldMeta.loadOrCreate(Path worldDir, long forcedSeed)` overload —
+  uses the forced seed when creating a new `world.dat`, delegates to the existing
+  overload when the file already exists.
+- Added `GameServer(Path, int, long)` constructor — passes `forcedSeed` to
+  `WorldMeta.loadOrCreate`.
+- Rewrote `GameLoop` server lifecycle: server no longer starts in `Main.java`.
+  `launchWorld(String worldName, Long seed)` starts a daemon background thread
+  that calls `GameServer`, `awaitReady()`, and `ClientNetworkManager.connect()`,
+  then posts a `Runnable` to `pendingMainThreadAction` (AtomicReference). The GL
+  thread drains this at the top of each loop iteration — the world-launch thread
+  never touches GL.
+- Added `returnToMainMenu()` to `GameLoop` — disconnects network, stops server,
+  calls `clientWorld.reset()`, resets player and camera, releases cursor, shows
+  main menu.
+- Added `ClientWorld.reset()` — releases all GL mesh resources (`mesh.cleanup()`
+  on each entry in the mesh map), clears all chunk data maps and pending queues,
+  resets spawn position. Must be called on the GL thread.
+- Simplified `Main.java` — now just `Blocks.bootstrap()` + username parse + `new GameLoop(...).run()`.
+- `MainMenuScreen` "Singleplayer" button now pushes `WorldSelectScreen` instead of
+  directly starting the game. Extracted `createMainMenu()` factory method in
+  `GameLoop` so the Back button can return to the main menu without duplicating
+  callback wiring.
+- Added `WorldSelectScreen.refreshWorldList()` — scans with `Files.newDirectoryStream`,
+  filters for `world.dat` presence, sorts alphabetically.
+- Added `WorldSelectScreen.deleteDirectoryRecursive(Path)` — DFS delete avoiding
+  `Files.walk` stream exception issues.
+- Diagnostic console output (`FPS | UPS | Chunks`) now only prints when
+  `serverChannel != null && !screenManager.hasActiveScreen()` — suppressed on menus
+  where no world is loaded.
+
+### Decisions Made
+- **Callback pattern (Consumer/BiConsumer) for world launch.** `WorldSelectScreen`
+  knows nothing about `GameServer` — it calls `onWorldSelected.accept(name, seed)`.
+  `GameLoop` supplies the lambda that starts the server. Clean separation: the screen
+  is a pure UI component, the loop owns lifecycle.
+- **Background launch thread with AtomicReference pending action.** `awaitReady()`
+  blocks for ~50–100ms until Netty binds the port. Blocking the GL thread would
+  freeze the window. The `pendingMainThreadAction` single-slot queue is the same
+  pattern used throughout the project for cross-thread handoff.
+- **`seed = null` means random.** `WorldSelectScreen` passes `null` when the seed
+  field is blank. `GameLoop.launchWorld()` branches on null to choose the constructor.
+  Avoids magic sentinel values like `-1` or `Long.MIN_VALUE`.
+- **World validity = `world.dat` presence.** A directory without `world.dat` is not
+  listed. This correctly excludes partially-created directories and non-world folders
+  that happen to be inside `worlds/`.
+
+### Problems Encountered
+- `StringIndexOutOfBoundsException` in `renderCreate` — `nameCaretPos` was not reset
+  when entering `CREATE_NEW` mode, so a stale value from a previous open exceeded the
+  (empty) string length. Fixed by resetting all caret and input state in `onShow()`
+  and also in `handleListClick` when switching to `CREATE_NEW`.
+- Wrong buttons triggering wrong actions — `handleListClick` was using the old
+  single-row button coordinates (`btnRowX` / `totalW`) while `renderList` had been
+  updated to a 2×2 grid. The render and click-handler must always compute positions
+  with identical formulas. Fixed by making both use `btnW = (PANEL_W - 32 - BTN_GAP) / 2`
+  and the same `row1Y` / `row2Y` locals.
+
+### AI Assistance Notes
+- Claude wrote all new files and modifications. Copilot fixed the `onCharTyped`
+  argument order in `UiRenderer.drawText` (x, y, text vs text, x, y).
+
+### Lessons / Observations
+- Render and click-handler layout calculations must be kept in sync. The safest
+  pattern is to extract button coordinates into local variables computed identically
+  in both methods, or to extract a layout object. Drift between the two is the most
+  common source of "wrong button fires" bugs.
+- `AtomicReference<Runnable>` as a single-slot main-thread queue is a clean, minimal
+  pattern for posting GL-thread work from background threads. For more than one
+  concurrent pending action, switch to `ConcurrentLinkedQueue<Runnable>`.
+
+---
+
+## Entry 041 — Phase 6B-6: Pause Menu + UI Polish
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility
+
+### What Was Done
+- Added `Screen.isOverlay()` default method (returns false) — overlay screens render
+  on top of the world instead of replacing it.
+- Added `ScreenManager.isActiveScreenOverlay()` — returns true if active screen is
+  an overlay.
+- Updated `GameLoop.loop()` and `window.setRefreshCallback()` render branches:
+  full-screen menus skip world render; overlay screens run world render first, then
+  draw the screen on top.
+- Created `PauseMenuScreen.java` in `game/screen/` — overlay (`isOverlay()` = true).
+  Three buttons: Resume (recaptures cursor), Main Menu (calls `returnToMainMenu()`),
+  Quit (closes window). Dark semi-transparent panel over the rendered world.
+- Rewrote `GameLoop` Escape key handling: extracted `handleEscapeKey(long win, int key)`
+  called from the GLFW key callback. In-game + cursor captured → open pause menu +
+  release cursor. Overlay active → forward Escape to screen (Resume behavior). Full-screen
+  menu active → forward Escape to screen (Back behavior). Escape no longer handled
+  inside `update()` to avoid conflicts.
+- Added `InputHandler.resetMouseDelta()` — snaps `lastMouseX/Y` to current cursor
+  position. Called after every cursor recapture (`GLFW_CURSOR_DISABLED`) to discard
+  movement accumulated during menu navigation. Without this, the camera jumps by the
+  full cursor travel distance on the first frame after resuming.
+- Added `UiRenderer.measureText(String)` — delegates to `GlyphAtlas.measureText()`.
+  Returns actual rendered pixel width from AWT font metrics.
+- Added `UiRenderer.drawCenteredText(float centerX, float y, String, ...)` — draws
+  text horizontally centered around a pixel X coordinate.
+- Fixed button text centering in `MainMenuScreen` and `WorldSelectScreen` — replaced
+  all `label.length() * 8` and hardcoded `* 16` formulas with `r.measureText(label)`.
+  Root cause: `length * constant` only works when the constant exactly matches the
+  atlas advance width, which AWT does not guarantee for all glyphs.
+- Fixed title centering: replaced `(sw - title.length() * 16) / 2` with
+  `r.drawCenteredText(panelX + PANEL_W / 2.0f, ...)`.
+- Added key-repeat forwarding in `GameLoop` key callback: `GLFW_REPEAT` events are
+  now forwarded to `screenManager.onKeyPress()` in addition to `GLFW_PRESS`. Escape
+  is excluded from repeat forwarding. This gives backspace and delete auto-repeat
+  behavior in text input fields at the OS key-repeat rate with no extra code in screens.
+- Improved `WorldSelectScreen` input fields:
+  - Insert-mode caret: typed characters insert at `nameCaretPos` / `seedCaretPos`
+    using substring split; characters after the caret shift right rather than being
+    overwritten.
+  - Arrow keys (Left/Right), Home, End: move caret without altering text.
+  - Delete key: forward-delete (removes character after caret).
+  - Mouse click → caret position: `handleCreateClick` computes caret from click X
+    using `charPixelWidth` (cached from `r.measureText("X")` each render frame).
+  - Tab key: switches active field between name and seed.
+- Replaced string-interpolated `|` caret with a 2px wide `drawRect` caret drawn
+  at the exact pixel position between characters. The `|` character occupies a full
+  character cell, pushing subsequent text right; the rect caret does not.
+- Added blinking caret: `caretBlinkTimer` accumulates `0.016f` per frame and toggles
+  `caretVisible` every `CARET_BLINK_INTERVAL = 0.5f` seconds. Timer and visibility
+  reset in `onShow()` so the caret is always visible when the screen first opens.
+
+### Known Issue
+- Caret blink speed is approximated at 60 FPS using a fixed `+0.016f` per frame.
+  At other frame rates the blink interval drifts proportionally (faster at >60 FPS,
+  slower at <60 FPS). Acceptable for a blink effect; exact timing would require
+  passing real delta time into `Screen.render()`, which is a `Screen` interface
+  change deferred until there is a stronger reason to do it.
+
+### Decisions Made
+- **Overlay vs full-screen menus.** The `isOverlay()` flag on `Screen` is the
+  clean architectural seam. Adding a new overlay (inventory, hotbar, chat) requires
+  only overriding one method — the loop branching handles the rest automatically.
+- **`handleEscapeKey()` owns Escape globally.** Previously Escape was handled inside
+  `update()`, which is skipped when a screen is active. Moving it to the key callback
+  ensures it fires regardless of screen state and centralizes all Escape behavior in
+  one place.
+- **`resetMouseDelta()` call site is the recapture point.** The fix must be at the
+  cursor recapture call (`glfwSetInputMode → CURSOR_DISABLED`), not inside
+  `InputHandler.update()`, because the cursor position at capture time is the correct
+  new baseline.
+- **`charPixelWidth` cached from render, used in click handler.** The click handler
+  needs the same advance width the renderer used. Measuring `r.measureText("X")` once
+  per render frame and caching it guarantees the two are always in sync regardless of
+  any future font changes.
+
+### Problems Encountered
+- Camera jump on pause resume — cursor traveled freely during menu; first frame after
+  recapture computed a huge delta. Fixed by `resetMouseDelta()`.
+- Text centering visually wrong even after `measureText` was added — investigation
+  showed `MainMenuScreen.drawButton` still used `label.length() * 8` (half the real
+  width). Fixed by replacing all hardcoded formulas with `r.measureText()`.
+- Caret position off by ~2× when clicking input fields — `handleCreateClick` used
+  the hardcoded `GLYPH_W = 16` constant instead of the real atlas advance width.
+  Fixed by using `charPixelWidth` cached from the render pass.
+
+### AI Assistance Notes
+- Claude wrote all files. Copilot assisted with `ClientWorld.reset()` implementation
+  (identifying the correct map/queue field names to clear).
+
+### Lessons / Observations
+- The render pass and the click handler are two halves of the same layout. Any pixel
+  value computed in one must be reachable by the other — either as a shared constant,
+  a shared local (if same method), or a cached field. Ad-hoc duplication always drifts.
+- Overlay rendering is essentially free — the world was already being rendered. The
+  only cost is the UI draw calls on top, which are negligible.
+- Key repeat (`GLFW_REPEAT`) is easy to miss — GLFW documents it but the default
+  callback setup only checks `GLFW_PRESS`. Adding it to the forwarding condition
+  gives all screens free hold-to-repeat with zero per-screen code.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

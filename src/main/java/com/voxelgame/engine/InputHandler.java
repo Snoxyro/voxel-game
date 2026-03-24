@@ -143,4 +143,19 @@ public class InputHandler {
     public float getMouseDeltaY() {
         return mouseDeltaY;
     }
+
+    /**
+     * Discards accumulated mouse movement by snapping the last-known cursor
+     * position to the current cursor position.
+     *
+     * Call this immediately after recapturing the cursor (switching from
+     * GLFW_CURSOR_NORMAL to GLFW_CURSOR_DISABLED) to prevent the camera from
+     * lurching by the distance the free cursor traveled during a menu.
+     */
+    public void resetMouseDelta() {
+        double[] x = {0}, y = {0};
+        GLFW.glfwGetCursorPos(windowHandle, x, y);
+        lastMouseX = x[0];
+        lastMouseY = y[0];
+    }
 }

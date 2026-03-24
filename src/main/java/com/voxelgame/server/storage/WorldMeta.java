@@ -81,6 +81,38 @@ public class WorldMeta {
         return new WorldMeta(seed);
     }
 
+    /**
+     * Loads the seed from {@code world.dat} if the file exists, otherwise creates
+     * a new {@code world.dat} using {@code forcedSeed} instead of a random value.
+     *
+     * <p>Use this when the player has explicitly entered a seed at world-creation
+     * time. Has no effect on worlds that already have a {@code world.dat}.</p>
+     *
+     * @param worldDir   path to the world folder
+     * @param forcedSeed seed to write for new worlds; ignored for existing worlds
+     */
+    public static WorldMeta loadOrCreate(Path worldDir, long forcedSeed) {
+        // If world.dat already exists, ignore forcedSeed — existing world owns its seed
+        Path metaFile = worldDir.resolve("world.dat");
+        if (Files.exists(metaFile)) {
+            return loadOrCreate(worldDir); // delegate to existing logic
+        }
+        // New world — use the provided seed instead of random
+        try {
+            Files.createDirectories(worldDir);
+            try (DataOutputStream out = new DataOutputStream(
+                    Files.newOutputStream(metaFile))) {
+                out.writeLong(forcedSeed);
+            }
+            System.out.printf("[WorldMeta] Created world.dat with seed %d in %s%n",
+                forcedSeed, worldDir);
+            return new WorldMeta(forcedSeed);
+        } catch (IOException e) {
+            System.err.println("[WorldMeta] Failed to create world.dat: " + e.getMessage());
+            return new WorldMeta(forcedSeed); // still usable even if file write failed
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

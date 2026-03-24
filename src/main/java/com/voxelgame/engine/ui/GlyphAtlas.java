@@ -148,6 +148,9 @@ public final class GlyphAtlas {
     /** Returns the pixel height of a single line of text. */
     public int lineHeight() { return CELL_H; }
 
+    /** Returns the pixel width of one character cell in the atlas. */
+    public int getCellWidth() { return CELL_W; }
+
     /** UV accessors — clamp out-of-range characters to the first slot. */
     public float uMin(char c) { return uMin[idx(c)]; }
     public float uMax(char c) { return uMax[idx(c)]; }

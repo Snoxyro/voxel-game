@@ -28,10 +28,14 @@ helps, where it fails, and what it cannot replace.
 ## Package Structure
 ```
 src/main/java/com/voxelgame/
-├── Main.java                  ← singleplayer: embedded server + client on localhost
+├── Main.java                  ← singleplayer: minimal bootstrap only (server lifecycle in GameLoop)
 ├── common/
 │   ├── world/                 ← shared data types used by both server and client
 │   │   ├── Block.java
+│   │   ├── BlockType.java     ← registered block type (replaces Block enum)
+│   │   ├── BlockRegistry.java ← static registry: register(), getById(), getByName()
+│   │   ├── Blocks.java        ← well-known block constants: AIR, GRASS, DIRT, STONE
+│   │   ├── TextureLayers.java ← texture layer index constants (moved out of engine/)
 │   │   ├── BlockView.java     ← interface: getBlock(x,y,z) — implemented by World and ClientWorld
 │   │   ├── Chunk.java
 │   │   ├── ChunkPos.java
@@ -48,46 +52,65 @@ src/main/java/com/voxelgame/
 │           ├── LoginRequestPacket.java
 │           ├── LoginSuccessPacket.java
 │           ├── ChunkDataPacket.java
-│           └── UnloadChunkPacket.java
+│           ├── UnloadChunkPacket.java
+│           ├── BlockBreakPacket.java
+│           ├── BlockPlacePacket.java
+│           ├── BlockChangePacket.java
+│           ├── PlayerMoveSBPacket.java
+│           ├── PlayerMoveCBPacket.java
+│           ├── PlayerSpawnPacket.java
+│           └── PlayerDespawnPacket.java
 ├── server/                    ← headless server: no GL, no LWJGL, no engine imports
 │   ├── ServerMain.java        ← dedicated server entry point (./gradlew runServer)
 │   ├── GameServer.java        ← 20 TPS game loop, player login/disconnect callbacks
 │   ├── PlayerSession.java     ← per-client state: channel, position, loaded chunk set
 │   ├── ServerWorld.java       ← wraps World, drives chunk streaming per player
 │   ├── network/
-│   |   ├── ServerNetworkManager.java
-│   |   └── ClientHandler.java
-│   └── storage/               ← FlatFileChunkStorage (ChunkStorage impl)
+│   │   ├── ServerNetworkManager.java
+│   │   └── ClientHandler.java
+│   └── storage/
+│       ├── ChunkStorage.java  ← interface: load/save chunks
+│       ├── FlatFileChunkStorage.java
+│       └── WorldMeta.java     ← reads/writes world.dat (seed); loadOrCreate(Path) and loadOrCreate(Path, long)
 ├── client/                    ← client-side: rendering, input, local world state
-│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders them
+│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders; reset() for menu return
 │   └── network/
 │       ├── ClientNetworkManager.java
 │       └── ServerHandler.java
 ├── engine/                    ← GL/GLFW systems — client-only, never server
-│   ├── ui/                    ← UI rendering: GlyphAtlas.java, UiShader.java, UiRenderer.java
-│   ├── GameLoop.java
+│   ├── ui/                    ← UI rendering subsystem
+│   │   ├── GlyphAtlas.java    ← AWT font baked to GL_TEXTURE_2D; measureText(), charWidth()
+│   │   ├── UiShader.java      ← orthographic 2D shader wrapper
+│   │   └── UiRenderer.java    ← batched quad renderer; drawRect(), drawText(), drawCenteredText(), measureText()
+│   ├── GameLoop.java          ← main loop; owns ScreenManager, launchWorld(), returnToMainMenu()
 │   ├── Camera.java
 │   ├── Window.java
-│   ├── InputHandler.java
+│   ├── InputHandler.java      ← resetMouseDelta() prevents camera jump after cursor recapture
 │   ├── ShaderProgram.java
 │   ├── Mesh.java
 │   ├── TextureManager.java
 │   ├── HudRenderer.java
 │   └── BlockHighlightRenderer.java
 ├── game/                      ← server-side gameplay logic
-│   ├── screen/                ← Screen interface: Screen.java, ScreenManager.java, MainMenuScreen.java
-│   ├── World.java             ← chunk data manager: generation, storage, load/unload (NO GL)
+│   ├── screen/                ← Screen system
+│   │   ├── Screen.java        ← interface: render, onShow/Hide, input; isOverlay() default false
+│   │   ├── ScreenManager.java ← owns UiRenderer; setScreen(), isActiveScreenOverlay()
+│   │   ├── MainMenuScreen.java
+│   │   ├── WorldSelectScreen.java ← world list, create (name+seed), delete, launch
+│   │   └── PauseMenuScreen.java   ← overlay screen; Resume, Main Menu, Quit
+│   ├── World.java
 │   ├── TerrainGenerator.java
-│   ├── ChunkMesher.java       ← stateless, thread-safe — used by ClientWorld on worker threads
+│   ├── ChunkMesher.java
 │   ├── Player.java
-|   └── ChunkStorage.java
+│   └── ChunkStorage.java
 └── util/
     └── OpenSimplex2S.java
 
 src/main/resources/
 ├── shaders/
-│   ├── default.vert / default.frag
-│   └── hud.vert / hud.frag
+│   ├── default.vert / default.frag   ← 3D world shader
+│   ├── hud.vert / hud.frag           ← HUD crosshair shader
+│   └── ui.vert / ui.frag             ← orthographic 2D UI shader
 ├── textures/
 └── sounds/
 ```
@@ -95,9 +118,13 @@ src/main/resources/
 ## Architecture Decisions (Locked)
 
 ### 1. Singleplayer = Embedded Server
-`Main.java` launches a `GameServer` on a daemon thread, waits for the port to bind
-via `CountDownLatch`, then connects a `ClientNetworkManager` and runs `GameLoop`.
-No separate singleplayer code path. Ever.
+`Main.java` is now minimal — it bootstraps registries and constructs `GameLoop`.
+`GameLoop` owns the server lifecycle: `launchWorld(worldName, seed)` starts
+`GameServer` on a daemon thread, waits for the port to bind via `awaitReady()`,
+connects `ClientNetworkManager`, and posts a main-thread action to dismiss the
+loading screen. `returnToMainMenu()` disconnects, stops the server, calls
+`clientWorld.reset()`, and returns to the main menu. No separate singleplayer
+code path. Ever.
 
 ### 2. Server Is Fully Headless
 The `server/` package has **zero imports from `engine/`**. No `Mesh`, no `ShaderProgram`,
@@ -130,7 +157,23 @@ component owned by `Player` — the pattern to follow.
 - Server: Netty I/O threads ↔ concurrent queues ↔ 20 TPS server tick thread
 - Client: Netty I/O thread → `ClientWorld` queues → main GL thread (mesh upload)
 - Chunk meshing: worker thread pool (availableProcessors - 1), snapshot isolation
+- World launch: dedicated daemon thread blocks on `awaitReady()` + `network.connect()`,
+  then posts a `Runnable` to `pendingMainThreadAction` (AtomicReference) for the GL thread
 - Rule: never pass live mutable state between threads; always snapshot first
+
+### 9. Screen System
+- `Screen` interface: `render()`, `onShow/Hide()`, input callbacks, `isOverlay()` (default false)
+- Full-screen menus (main menu, world select): replace world render entirely
+- Overlay screens (pause menu): world renders first, screen draws on top
+- `ScreenManager` owns `UiRenderer`, `GlyphAtlas`, `UiShader` — shared across all screens
+- Button centering always uses `r.measureText(label)` — never hardcoded character widths
+- `isOverlay()` flag controls whether `GameLoop.loop()` skips or keeps the world render
+
+### 10. UI Theme (Planned)
+All color constants and common draw helpers (`drawButton`, `drawPanel`, `drawInputField`)
+are currently duplicated per screen. This will be consolidated into a `UiTheme` class
+in a future cleanup pass. When implementing new screens before that cleanup, follow the
+existing per-screen constant pattern — the theme refactor will sweep everything at once.
 
 ## Development Phases
 - **Phase 0 (done):** Foundation — window, OpenGL context, game loop, triangle
@@ -139,23 +182,18 @@ component owned by `Player` — the pattern to follow.
 - **Phase 3 (done):** Gameplay basics — block placing/breaking, HUD, physics
 - **Phase 4 (done):** Performance — greedy meshing, AO, textures, async streaming
 - **Phase 5 (done):** Multiplayer — client/server split, chunk streaming, block sync
-- **Phase 6 (current):** Modding API — scripting runtime, registry system
+- **Phase 6 (current):** Foundation for extensibility
 
-## Phase 5 Sub-phases
-- **5A (done):** Package restructure, Netty, handshake/login
-- **5B (done):** Chunk streaming — server generates, client renders via TCP
-- **5C (done):** Block interaction sync — break/place packets, server broadcast
-- **5D (done):** Player movement sync — streaming center follows player;
-  other-player broadcasting with PlayerSpawn/Move/Despawn; RemotePlayer interpolation.
-  Client-side prediction deferred indefinitely — imperceptible on localhost.
-- **5E (done):** World persistence — ChunkStorage interface, FlatFileChunkStorage,
-  dirty tracking, background save queue, load-from-disk-or-generate on executor
-- **5F (done):** Singleplayer integration cleanup, dedicated server mode, CLI args,
-  world.dat seed file (seed per world, not hardcoded)
-
-  ## Phase 6 Sub-phases
+## Phase 6 Sub-phases
 - **6A (done):** Block Registry — Block enum → registered class with stable IDs.
-- **6B (current):** Menu / UI System — 6B-1/2/3 done, world select next.
+- **6B (current):** Menu / UI System
+  - **6B-1 (done):** UI rendering foundation — GlyphAtlas, UiShader, UiRenderer
+  - **6B-2 (done):** Screen abstraction — Screen, ScreenManager, GameLoop wiring
+  - **6B-3 (done):** Main menu — Singleplayer / Multiplayer stub / Quit
+  - **6B-4 (done):** World selection screen — list, create (name+seed), delete, launch
+  - **6B-5 (next):** Multiplayer connect screen — IP/port input, direct server connect
+  - **6B-6 (done):** In-game pause menu — overlay, Resume / Main Menu / Quit
+  - **6B-7:** Settings stub
 - **6C:** Lighting + Day/Night Cycle — skylight propagation, block light foundation,
   sun cycle, ambient light.
 - **6D:** Entity System + Player Model — entity framework, skeletal player model,
@@ -164,15 +202,26 @@ component owned by `Player` — the pattern to follow.
 
 ## How to Build and Run
 ```bash
-./gradlew run          # Singleplayer (embedded server + client window)
-./gradlew runServer    # Dedicated headless server only
-./gradlew build        # Build without running
-./gradlew clean build  # Clean build
+./gradlew run                              # Singleplayer (menu → world select → play)
+./gradlew runServer                        # Dedicated headless server only
+./gradlew runServer --args="--world myworld --port 25565"
+./gradlew build                            # Build without running
+./gradlew clean build                      # Clean build
 ```
 
 ## Important Notes for Claude
 
-### Always read DEVLOG.md
+### Context File Maintenance (REQUIRED)
+After every session that makes meaningful progress, the following files MUST be updated
+before giving the commit message. Do not wait to be asked:
+- **DEVLOG.md** — add a new entry for everything done this session
+- **CLAUDE.md** — update package structure, phase status, architecture decisions if changed
+- **README.md** — update phase checklist, controls, package overview if changed
+- **.github/copilot-instructions.md** — update current phase, key constraints if changed
+
+This is mandatory. Stale context files defeat the purpose of having them.
+
+### Always Read DEVLOG.md First
 Check DEVLOG.md for the latest progress before responding. It contains the full
 history of decisions, bugs encountered, and current state.
 
@@ -194,6 +243,11 @@ intentionally learning from these decisions — don't hide them.
 This project intentionally explores AI limitations. Be honest when a problem requires
 human debugging judgment that AI cannot reliably provide.
 
+### Provide Exact File and Location for Every Change
+When giving code changes, always state the exact file path, the exact method or block
+to replace, and provide the full replacement block. The codebase is large enough that
+"find the X method and update it" is not sufficient. Full copy-pasteable blocks only.
+
 ### What NOT to Do
 - Do not suggest Maven, Vulkan, Spring, Jakarta, or any web framework
 - Do not use deprecated LWJGL 2 APIs
@@ -202,4 +256,6 @@ human debugging judgment that AI cannot reliably provide.
 - Do not add `Mesh` or rendering code to `World.java` or `ServerWorld.java`
 - Do not construct GL resources (VAOs, VBOs, textures) in constructors of classes
   that are instantiated before GameLoop.init() — the GL context does not exist yet.
-  Use a separate initRenderResources() method called after window.init().
+  Use a separate `initRenderResources()` method called after `window.init()`
+- Do not hardcode character widths for UI text centering — always use `r.measureText()`
+- Do not call `screenManager.onKeyPress()` for the Escape key — `handleEscapeKey()` owns it

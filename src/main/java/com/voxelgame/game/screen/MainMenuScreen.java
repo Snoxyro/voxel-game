@@ -1,5 +1,6 @@
 package com.voxelgame.game.screen;
 
+import com.voxelgame.engine.ui.GlyphAtlas;
 import com.voxelgame.engine.ui.UiRenderer;
 import org.lwjgl.glfw.GLFW;
 
@@ -29,6 +30,7 @@ public class MainMenuScreen implements Screen {
     private static final int BUTTON_W    = 240;
     private static final int BUTTON_H    = 40;
     private static final int BUTTON_GAP  = 14;  // vertical gap between buttons
+    @SuppressWarnings("unused")
     private static final int TITLE_SIZE  = 2;   // glyph scale multiplier (not used yet — reserved)
 
     // Panel background color — dark, semi-transparent Minecraft-style
@@ -36,6 +38,7 @@ public class MainMenuScreen implements Screen {
 
     // Button colors
     private static final float BTN_R     = 0.25f, BTN_G = 0.25f, BTN_B = 0.25f, BTN_A = 1.0f;
+    @SuppressWarnings("unused")
     private static final float BTN_HOV_R = 0.40f, BTN_HOV_G = 0.40f, BTN_HOV_B = 0.40f, BTN_HOV_A = 1.0f;
     private static final float BTN_TXT_R = 1.00f, BTN_TXT_G = 1.00f, BTN_TXT_B = 1.00f, BTN_TXT_A = 1.0f;
 
@@ -109,15 +112,10 @@ public class MainMenuScreen implements Screen {
         // --- Background panel ---
         r.drawRect(panelX, panelY, PANEL_W, PANEL_H, PANEL_R, PANEL_G, PANEL_B, PANEL_A);
 
-        // --- Title ---
-        String title = "VOXEL GAME";
-        // Center text horizontally inside the panel.
-        // GlyphAtlas CELL_W = 16 per character — measure via UiRenderer would be
-        // cleaner but we don't expose measureText here yet; hardcode for now.
-        int titleTextW = title.length() * 16; // approx: each char ~16px wide
-        int titleX = (sw - titleTextW) / 2;
-        int titleY = panelY + 28;
-        r.drawText(titleX, titleY, title, TITLE_R, TITLE_G, TITLE_B, TITLE_A);
+        // --- Title — centered in the panel using the correct measured width ---
+        String title  = "VOXEL GAME";
+        int    titleY = panelY + 28;
+        r.drawCenteredText(panelX + PANEL_W / 2.0f, titleY, title, TITLE_R, TITLE_G, TITLE_B, TITLE_A);
 
         // --- Buttons ---
         drawButton(r, btnX, btn1Y, BUTTON_W, BUTTON_H, "Singleplayer");
@@ -127,21 +125,21 @@ public class MainMenuScreen implements Screen {
 
     /**
      * Draws a single button, highlighted if the cursor is hovering over it.
+     * Text is centered using the atlas's actual measured glyph widths.
      */
     private void drawButton(UiRenderer r, int x, int y, int w, int h, String label) {
         boolean hovered = mouseX >= x && mouseX <= x + w
                        && mouseY >= y && mouseY <= y + h;
 
-        if (hovered) {
-            r.drawRect(x, y, w, h, BTN_HOV_R, BTN_HOV_G, BTN_HOV_B, BTN_HOV_A);
-        } else {
-            r.drawRect(x, y, w, h, BTN_R, BTN_G, BTN_B, BTN_A);
-        }
+        r.drawRect(x, y, w, h,
+            hovered ? BTN_HOV_R : BTN_R,
+            hovered ? BTN_HOV_G : BTN_G,
+            hovered ? BTN_HOV_B : BTN_B,
+            BTN_A);
 
-        // Center text inside button
-        int textW = label.length() * 8; // GlyphAtlas charWidth avg — rough center
-        int textX = x + (w - textW) / 2;
-        int textY = y + (h - 16) / 2;   // 16 = GlyphAtlas.CELL_H
+        // Use r.measureText() — GlyphAtlas.CELL_W is the line height for vertical centering
+        int textX = x + (w - r.measureText(label)) / 2;
+        int textY = y + (h - GlyphAtlas.CELL_H) / 2;
         r.drawText(textX, textY, label, BTN_TXT_R, BTN_TXT_G, BTN_TXT_B, BTN_TXT_A);
     }
 

@@ -78,6 +78,21 @@ public class GameServer {
     }
 
     /**
+     * Creates a GameServer on the given world directory and port, using {@code forcedSeed}
+     * if this is a new world (no existing {@code world.dat}).
+     *
+     * @param worldDir    path to the world root folder
+     * @param port        TCP port to listen on
+     * @param forcedSeed  seed to use when creating a new world; ignored for existing worlds
+     */
+    public GameServer(Path worldDir, int port, long forcedSeed) {
+        WorldMeta meta        = WorldMeta.loadOrCreate(worldDir, forcedSeed);
+        FlatFileChunkStorage storage = new FlatFileChunkStorage(worldDir);
+        this.serverWorld      = new ServerWorld(meta.getSeed(), storage);
+        this.network          = new ServerNetworkManager(port, this);
+    }
+
+    /**
      * Starts the server and blocks until stopped. Designed to run on a dedicated thread.
      *
      * <ol>

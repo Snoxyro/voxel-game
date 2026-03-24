@@ -472,6 +472,29 @@ public class ClientWorld implements BlockView {
      * Shuts down mesh worker threads and frees all GPU resources.
      * Must be called on the main (GL) thread at shutdown.
      */
+    /**
+     * Unloads all chunks and releases all GL mesh resources. Must be called on the GL thread. Used when returning to the main menu.
+     */
+    public void reset() {
+        pendingChunkData.clear();
+        pendingUnloads.clear();
+        pendingMeshes.clear();
+        pendingBlockChanges.clear();
+
+        meshInProgress.clear();
+        dirtyMeshes.clear();
+
+        for (Mesh mesh : meshes.values()) {
+            mesh.cleanup();
+        }
+        meshes.clear();
+        chunks.clear();
+
+        spawnX = 64.0f;
+        spawnY = 70.0f;
+        spawnZ = 64.0f;
+    }
+
     public void cleanup() {
         meshExecutor.shutdownNow();
         if (remotePlayerRenderer != null) remotePlayerRenderer.cleanup();

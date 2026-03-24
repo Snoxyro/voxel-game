@@ -18,28 +18,38 @@ voxel game with multiplayer, world persistence, and modding support.
 ## Package Structure
 ```
 com.voxelgame.
-├── Main.java                  ← singleplayer entry (embedded server + client)
+├── Main.java                  ← minimal bootstrap: Blocks.bootstrap() + new GameLoop(...).run()
 ├── common/
-│   ├── world/                 ← shared types: Block, BlockView, Chunk, ChunkPos,
-│   │                             PhysicsBody, RayCaster, RaycastResult
-│   └── network/               ← wire protocol: Packet, PacketId, encoder, decoder, packet records
+│   ├── world/                 ← shared types: BlockType, BlockRegistry, Blocks, Block,
+│   │                             BlockView, Chunk, ChunkPos, PhysicsBody, RayCaster,
+│   │                             RaycastResult, TextureLayers
+│   └── network/               ← wire protocol: Packet, PacketId, encoder, decoder, all packet records
 ├── server/                    ← headless server — ZERO engine/GL imports
 │   ├── ServerMain.java
-│   ├── GameServer.java        ← 20 TPS game loop
+│   ├── GameServer.java        ← 20 TPS game loop; constructors: (Path,int) and (Path,int,long)
 │   ├── PlayerSession.java
 │   ├── ServerWorld.java
 │   ├── network/               ← ServerNetworkManager, ClientHandler
-│   └── storage/               ← FlatFileChunkStorage (ChunkStorage impl)
-├── client/                    ← client-side logic
-│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders
+│   └── storage/               ← FlatFileChunkStorage, WorldMeta, ChunkStorage interface
+├── client/
+│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders; reset() clears all state
 │   └── network/               ← ClientNetworkManager, ServerHandler
 ├── engine/                    ← GL/GLFW systems — client main thread only
-│   ├── ui/                    ← UI rendering: GlyphAtlas, UiShader, UiRenderer
-│   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, etc.
-└── game/                      ← server-side gameplay
-│   ├── screen/                ← Screen interface, ScreenManager, all screen implementat
-    └── World (chunk data + persistence), TerrainGenerator, ChunkMesher,
-        Player, ChunkStorage (interface)
+│   ├── ui/
+│   │   ├── GlyphAtlas.java    ← AWT font baked to GL texture; measureText(), charWidth(), lineHeight()
+│   │   ├── UiShader.java
+│   │   └── UiRenderer.java    ← drawRect(), drawText(), drawCenteredText(), measureText()
+│   ├── GameLoop.java          ← owns ScreenManager; launchWorld(), returnToMainMenu(), handleEscapeKey()
+│   ├── InputHandler.java      ← resetMouseDelta() — call after cursor recapture to prevent camera jump
+│   └── Camera, Window, ShaderProgram, Mesh, TextureManager, HudRenderer, BlockHighlightRenderer
+└── game/
+    ├── screen/
+    │   ├── Screen.java        ← interface; isOverlay() default false
+    │   ├── ScreenManager.java ← setScreen(), hasActiveScreen(), isActiveScreenOverlay()
+    │   ├── MainMenuScreen.java
+    │   ├── WorldSelectScreen.java
+    │   └── PauseMenuScreen.java  ← isOverlay() = true
+    └── World, TerrainGenerator, ChunkMesher, Player, ChunkStorage
 ```
 
 ## Architecture Principles
@@ -54,7 +64,7 @@ and wants to add a `Mesh` or `ShaderProgram` — that is always wrong.
 All OpenGL calls (`GL11.*`, `GL30.*`, `new Mesh()`, etc.) must occur on the main
 thread only. Worker threads run `ChunkMesher.mesh()` (pure CPU). The main thread
 picks up results and calls `new Mesh(vertices)`. This rule applies to `ClientWorld`
-as well — `drainPendingMeshes()` must only be called from the main thread.
+as well — mesh uploads must only happen on the main thread.
 
 ### BlockView Interface
 `PhysicsBody`, `RayCaster`, and `Player` accept `BlockView` (not `World` or
@@ -70,9 +80,18 @@ Wire format: `[4-byte length][1-byte packet ID][payload]`. When adding a new pac
 All four files must be updated together.
 
 ### Singleplayer = Embedded Server
-`Main.java` starts `GameServer` on a daemon thread, waits for the port to bind,
-then connects `ClientNetworkManager` and runs `GameLoop`. No separate singleplayer
-code path. Ever.
+`Main.java` is now minimal. `GameLoop.launchWorld(worldName, seed)` handles the full
+server lifecycle on a background thread. `returnToMainMenu()` handles teardown.
+No separate singleplayer code path. Ever.
+
+### Screen System Rules
+- `Screen.isOverlay()` returning false (default): world render is skipped, only screen renders
+- `Screen.isOverlay()` returning true: world renders first, screen draws on top
+- `GameLoop.handleEscapeKey()` owns all Escape key behavior — screens must not intercept
+  Escape via `onKeyPress()` unless they are a non-overlay screen (WorldSelect, CreateNew substate)
+- After recapturing the cursor, always call `inputHandler.resetMouseDelta()` to prevent
+  the camera from lurching by however far the cursor traveled during the menu
+- Button text centering always uses `r.measureText(label)` — never hardcoded character widths
 
 ### Engine/Game Separation
 `engine/` never imports from `game/` or `server/`. `game/` never imports from
@@ -86,7 +105,8 @@ No deep inheritance hierarchies.
 ### Thread Handoff via Concurrent Queues
 Netty I/O threads write into `ConcurrentLinkedQueue`s. The main thread or server
 tick thread drains them. Never pass live mutable state between threads — always
-capture a snapshot before handing work to a background thread.
+capture a snapshot. `GameLoop.pendingMainThreadAction` (AtomicReference) is used
+for the world-launch background thread to post GL-thread work.
 
 ## Code Style
 - Standard Java naming conventions
@@ -97,31 +117,23 @@ capture a snapshot before handing work to a background thread.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 6 — Foundation for extensibility. Sub-phase 6B in progress (6B-1/2/3 done).
+Phase 6 — Foundation for extensibility. Sub-phase 6B in progress.
 
-### Phase 5 complete
-- 5A done: package restructure, Netty, handshake/login
-- 5B done: chunk streaming (server generates, client receives and renders)
-- 5C done: block interaction sync (break/place/broadcast)
-- 5D done: player movement sync, streaming center follows player,
-  other-player broadcasting, RemotePlayer with interpolation
-- 5E done: world persistence — ChunkStorage interface, FlatFileChunkStorage,
-  dirty tracking, background save executor, load-from-disk-or-generate
-- 5F done: CLI args (--world, --port, --username), world.dat seed file per world
+### Phase 6 status
+- 6A done: Block Registry — BlockType, BlockRegistry, Blocks; Chunk uses registry IDs
+- 6B-1 done: UI rendering foundation — GlyphAtlas, UiShader, UiRenderer
+- 6B-2 done: Screen abstraction — Screen, ScreenManager, GameLoop wiring
+- 6B-3 done: Main menu — Singleplayer / Multiplayer stub / Quit
+- 6B-4 done: World selection screen — list, create (name + seed), delete, launch
+- 6B-5 next: Multiplayer connect screen — IP/port text input, direct server connect
+- 6B-6 done: Pause menu — overlay screen; Resume, Main Menu, Quit
+- 6B-7 pending: Settings stub
 
-### Phase 6 plan
-- 6A next: Block Registry — convert Block enum to registered class with stable
-  numeric IDs. Chunk serialization, network protocol, save files all switch from
-  ordinal() to registry ID. Most architecturally disruptive change remaining.
-- 6B: Menu / UI System — main menu, world select, multiplayer connect, settings,
-  pause menu.
-- 6C: Lighting + Day/Night Cycle — skylight, block light, sun position, ambient.
-- 6D: Entity System + Player Model — entity framework, skeletal model, item drops.
-- 6E: Items + Inventory — item registry, hotbar, crafting, block drops.
-
-### Phase 7 (after Phase 6)
-Modding API — block/item/entity registries and event hooks exposed to external code.
-Deferred until registries, UI, lighting, and entities all exist as stable foundations.
+### After 6B
+- 6C: Lighting + Day/Night Cycle
+- 6D: Entity System + Player Model
+- 6E: Items + Inventory
+- Phase 7: Modding API (requires all of 6A–6E as foundations)
 
 ## Key Constraints
 - Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`
@@ -133,9 +145,13 @@ Deferred until registries, UI, lighting, and entities all exist as stable founda
 - UI render pass must call `glDisable(GL_CULL_FACE)` in `begin()` and restore it
   in `end()` — UI quads are wound CW in screen-space and are culled as back faces
   otherwise. `UiRenderer` already does this. Never remove those two calls.
-- Full-screen menus replace world render. Overlay screens (pause, inventory, hotbar)
-  run after `render()` in the same frame — `GameLoop.loop()` branches on a future
-  `isOverlay()` flag on `Screen`.
+- Full-screen menus replace world render. Overlay screens render after world render.
+  `GameLoop.loop()` branches on `screenManager.isActiveScreenOverlay()`.
+- Call `inputHandler.resetMouseDelta()` after every cursor recapture to prevent
+  camera jump. Failing to do this causes the camera to snap by the distance the
+  free cursor traveled while the menu was open.
+- Button/title text centering must use `r.measureText()` — hardcoded `length * N`
+  values are always wrong for proportional or atlas-based fonts.
 
 ## What NOT to Do
 - Do not suggest switching to Maven
@@ -145,3 +161,6 @@ Deferred until registries, UI, lighting, and entities all exist as stable founda
 - Do not add `Mesh`, `ShaderProgram`, or any `engine/` import to `server/` code
 - Do not add rendering code to `World.java` or `ServerWorld.java`
 - Do not call `new Mesh()` outside the main thread
+- Do not hardcode character widths for UI centering — use `r.measureText()`
+- Do not intercept Escape key in screen `onKeyPress()` for overlay screens —
+  `GameLoop.handleEscapeKey()` owns that behavior

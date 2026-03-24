@@ -1,13 +1,20 @@
 package com.voxelgame.engine;
 
 import com.voxelgame.client.ClientWorld;
+import com.voxelgame.client.network.ClientNetworkManager;
 import com.voxelgame.common.world.BlockType;
 import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.RayCaster;
 import com.voxelgame.common.world.RaycastResult;
 import com.voxelgame.game.Player;
 import com.voxelgame.game.screen.MainMenuScreen;
+import com.voxelgame.game.screen.PauseMenuScreen;
 import com.voxelgame.game.screen.ScreenManager;
+import com.voxelgame.game.screen.WorldSelectScreen;
+import com.voxelgame.server.GameServer;
+
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
@@ -46,7 +53,21 @@ public class GameLoop {
 
     private final Window      window;
     private final ClientWorld clientWorld;
-    private final io.netty.channel.Channel serverChannel;
+    private final String username;
+
+    // Volatile: written by the world-launch background thread, read by the GL thread.
+    // Null until the player selects a world and the server is ready.
+    private volatile io.netty.channel.Channel  serverChannel = null;
+    private volatile GameServer                activeServer   = null;
+    private volatile ClientNetworkManager      activeNetwork  = null;
+
+    /**
+     * Actions posted by background threads (e.g. world launch) to be executed on
+     * the GL thread at the start of the next loop iteration.
+     * AtomicReference gives us a single-slot queue — one pending action at a time
+     * is all we need here.
+     */
+    private final AtomicReference<Runnable> pendingMainThreadAction = new AtomicReference<>(null);
 
     private Camera                 camera;
     private InputHandler           inputHandler;
@@ -78,13 +99,87 @@ public class GameLoop {
      *
      * @param clientWorld the client-side world — receives chunks from the server,
      *                    provides block queries for physics and raycasting
-     * @param serverChannel the Netty channel connected to the server — used to send
-     *                      block interaction packets in Phase 5C
+     * @param username    the local player's username — used when connecting to the server
      */
-    public GameLoop(ClientWorld clientWorld, io.netty.channel.Channel serverChannel) {
-        this.window       = new Window("Voxel Game", 1280, 720);
-        this.clientWorld  = clientWorld;
-        this.serverChannel = serverChannel;
+    public GameLoop(ClientWorld clientWorld, String username) {
+        this.window      = new Window("Voxel Game", 1280, 720);
+        this.clientWorld = clientWorld;
+        this.username    = username;
+    }
+
+    /**
+     * Creates a configured {@link MainMenuScreen}.
+     * Extracted as a factory so the Back button in WorldSelectScreen can
+     * return here without duplicating the callback wiring.
+     */
+    private MainMenuScreen createMainMenu() {
+        return new MainMenuScreen(
+            screenManager,
+            // Singleplayer → push world selection screen
+            () -> screenManager.setScreen(new WorldSelectScreen(
+                screenManager,
+                this::launchWorld, // BiConsumer<String, Long> — matches the new signature
+                // Back button returns to main menu
+                () -> screenManager.setScreen(createMainMenu())
+            )),
+            // Quit → close window
+            () -> GLFW.glfwSetWindowShouldClose(window.getWindowHandle(), true)
+        );
+    }
+
+    /**
+     * Starts the embedded server for {@code worldName} on a daemon background thread.
+     * Blocks that thread until the port is bound and the client connects, then posts
+     * a main-thread action that dismisses the loading screen and begins gameplay.
+     *
+     * <p>Called from the GL thread (via WorldSelectScreen callback), but all blocking
+     * work happens off the GL thread so the window does not freeze.</p>
+     *
+     * @param worldName subdirectory of {@code worlds/} to load or create
+     * @param seed      the seed for the new world, or null for a random seed
+     */
+    private void launchWorld(String worldName, Long seed) {
+        Thread launchThread = new Thread(() -> {
+            try {
+                Path worldDir = Path.of("worlds", worldName);
+                GameServer server = (seed != null)
+                    ? new GameServer(worldDir, GameServer.PORT, seed)
+                    : new GameServer(worldDir, GameServer.PORT);
+
+                Thread serverThread = new Thread(server::start, "embedded-server");
+                serverThread.setDaemon(true);
+                serverThread.start();
+
+                // Blocks until the Netty port is bound (~<100 ms on localhost)
+                server.awaitReady();
+
+                ClientNetworkManager network = new ClientNetworkManager(
+                    "localhost", GameServer.PORT, username, clientWorld
+                );
+                network.connect();
+
+                // Store refs so cleanup() can shut them down cleanly
+                this.activeServer  = server;
+                this.activeNetwork = network;
+
+                // Volatile write — visible to GL thread on next read
+                this.serverChannel = network.getChannel();
+
+                // Post main-thread action: dismiss the loading screen and start playing.
+                // The GL thread picks this up at the top of the next loop iteration.
+                pendingMainThreadAction.set(() -> {
+                    screenManager.setScreen(null);
+                    cursorCaptured = true;
+                    GLFW.glfwSetInputMode(window.getWindowHandle(), GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+                    inputHandler.resetMouseDelta();
+                });
+
+            } catch (Exception e) {
+                System.err.println("[GameLoop] Failed to launch world '" + worldName + "': " + e.getMessage());
+            }
+        }, "world-launch");
+        launchThread.setDaemon(true);
+        launchThread.start();
     }
 
     /**
@@ -138,6 +233,15 @@ public class GameLoop {
         // still uses InputHandler polling (isKeyDown, wasMouseLeftClicked, etc.)
         keyCallback = GLFWKeyCallback.create((win, key, scancode, action, mods) -> {
             if (action == GLFW.GLFW_PRESS) {
+                // Escape handled separately — only on press, never on repeat
+                handleEscapeKey(win, key);
+            }
+            // Forward both PRESS and REPEAT to screens.
+            // REPEAT is the OS key-held signal — gives backspace/delete fast-delete behavior.
+            // Screens that don't care (main menu) simply ignore keys they don't handle.
+            // Escape is excluded from forwarding — handleEscapeKey owns it.
+            if ((action == GLFW.GLFW_PRESS || action == GLFW.GLFW_REPEAT)
+                    && key != GLFW.GLFW_KEY_ESCAPE) {
                 screenManager.onKeyPress(key, mods);
             }
         });
@@ -162,26 +266,22 @@ public class GameLoop {
         GLFW.glfwSetCharCallback(window.getWindowHandle(), charCallback);
 
         window.setRefreshCallback(() -> {
-            if (screenManager.hasActiveScreen()) {
+            if (screenManager.hasActiveScreen() && !screenManager.isActiveScreenOverlay()) {
+                // Full-screen menu — clear and render only the menu
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
                 screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
             } else {
+                // Normal world render (runs for both in-game and overlay-menu-over-world)
                 render();
+                if (screenManager.hasActiveScreen()) {
+                    // Overlay screen draws on top of the just-rendered world
+                    screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+                }
             }
             window.swapBuffers();
         });
 
-        screenManager.setScreen(new MainMenuScreen(
-            screenManager,
-            // onEnterGame — recapture cursor and begin playing
-            () -> {
-                cursorCaptured = true;
-                GLFW.glfwSetInputMode(window.getWindowHandle(),
-                    GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
-            },
-            // onQuit — close the window
-            () -> GLFW.glfwSetWindowShouldClose(window.getWindowHandle(), true)
-        ));
+        screenManager.setScreen(createMainMenu());
 
         System.out.println("Engine initialized.");
         System.out.println("Controls: WASD move | mouse look");
@@ -208,6 +308,10 @@ public class GameLoop {
         while (!window.shouldClose()) {
             window.pollEvents();
 
+            // Drain any action posted from a background thread (e.g. world launch done)
+            Runnable pendingAction = pendingMainThreadAction.getAndSet(null);
+            if (pendingAction != null) pendingAction.run();
+
             double currentTime = System.currentTimeMillis();
             double elapsed     = currentTime - previousTime;
             previousTime       = currentTime;
@@ -221,20 +325,27 @@ public class GameLoop {
                 accumulator -= updateInterval;
             }
 
-            if (screenManager.hasActiveScreen()) {
-                // Screen is active — skip game world render entirely.
-                // Clear the framebuffer so the previous world frame doesn't bleed through.
+            if (screenManager.hasActiveScreen() && !screenManager.isActiveScreenOverlay()) {
+                // Full-screen menu — clear and render only the menu
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
                 screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
             } else {
+                // Normal world render (runs for both in-game and overlay-menu-over-world)
                 render();
+                if (screenManager.hasActiveScreen()) {
+                    // Overlay screen draws on top of the just-rendered world
+                    screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+                }
             }
             frames++;
 
             if (System.currentTimeMillis() - diagnosticTimer >= 1000.0) {
-                System.out.printf("FPS: %d | UPS: %d | Chunks: %d/%d | Mode: %s | Selected: %s%n",
-                    frames, updates, lastRenderStats[0], lastRenderStats[1],
-                    freecam ? "FREECAM" : "PHYSICS", selectedBlock);
+                // Only print diagnostics while actually in-game — not on menus
+                if (serverChannel != null && !screenManager.hasActiveScreen()) {
+                    System.out.printf("FPS: %d | UPS: %d | Chunks: %d/%d | Mode: %s | Selected: %s%n",
+                        frames, updates, lastRenderStats[0], lastRenderStats[1],
+                        freecam ? "FREECAM" : "PHYSICS", selectedBlock);
+                }
                 frames          = 0;
                 updates         = 0;
                 diagnosticTimer = System.currentTimeMillis();
@@ -266,11 +377,11 @@ public class GameLoop {
         }
 
         // --- Cursor toggle ---
-        if (inputHandler.isKeyDown(GLFW.GLFW_KEY_ESCAPE) && cursorCaptured) {
-            cursorCaptured = false;
-            GLFW.glfwSetInputMode(window.getWindowHandle(),
-                GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
-        }
+        //if (inputHandler.isKeyDown(GLFW.GLFW_KEY_ESCAPE) && cursorCaptured) {
+        //    cursorCaptured = false;
+        //    GLFW.glfwSetInputMode(window.getWindowHandle(),
+        //        GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+        //}
         if (inputHandler.wasMouseLeftClicked() && !cursorCaptured) {
             cursorCaptured = true;
             GLFW.glfwSetInputMode(window.getWindowHandle(),
@@ -329,7 +440,7 @@ public class GameLoop {
         // Sent every tick regardless of whether position changed — simple and stateless.
         // Phase 5D: throttle to 20/s to match server TPS if bandwidth becomes a concern.
         Vector3f pos = camera.getPosition();
-        serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.PlayerMoveSBPacket(
+        if (serverChannel != null) serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.PlayerMoveSBPacket(
             pos.x, freecam ? pos.y : player.getBody().getPosition().y,
             pos.z, camera.getYaw(), camera.getPitch()
         ));
@@ -354,14 +465,14 @@ public class GameLoop {
         // --- Block interaction ---
         if (cursorCaptured && lastRaycast.hit()) {
             if (inputHandler.wasMouseLeftClicked()) {
-                serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockBreakPacket(
+                if (serverChannel != null) serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockBreakPacket(
                     lastRaycast.blockX(), lastRaycast.blockY(), lastRaycast.blockZ()));
             }
             if (inputHandler.wasMouseRightClicked()) {
                 // Guard: don't place a block inside the player (physics mode only)
                 int px = lastRaycast.placeX(), py = lastRaycast.placeY(), pz = lastRaycast.placeZ();
                 if (freecam || !player.getBody().overlapsBlock(px, py, pz)) {
-                    serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockPlacePacket(
+                    if (serverChannel != null) serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockPlacePacket(
                         px, py, pz, selectedBlock.getId()));
                 }
             }
@@ -394,9 +505,104 @@ public class GameLoop {
     }
 
     /**
+     * Handles the Escape key globally.
+     * <ul>
+     *   <li>Full-screen menu active → do nothing (each screen handles its own Escape)</li>
+     *   <li>Overlay (pause) menu active → forward to screen (Resume button or Escape closes it)</li>
+     *   <li>In-game, cursor captured → open pause menu</li>
+     *   <li>In-game, cursor released → recapture cursor</li>
+     * </ul>
+     */
+    private void handleEscapeKey(long win, int key) {
+        if (key != GLFW.GLFW_KEY_ESCAPE) return;
+
+        if (screenManager.hasActiveScreen() && !screenManager.isActiveScreenOverlay()) {
+            // Full-screen menu owns its own Escape handling via onKeyPress
+            screenManager.onKeyPress(GLFW.GLFW_KEY_ESCAPE, 0);
+            return;
+        }
+        if (screenManager.isActiveScreenOverlay()) {
+            // Forward to the overlay screen (pause menu's Escape = Resume)
+            screenManager.onKeyPress(GLFW.GLFW_KEY_ESCAPE, 0);
+            return;
+        }
+        if (serverChannel == null) return; // not in-game, nothing to do
+
+        if (cursorCaptured) {
+            // Open pause menu and release cursor
+            cursorCaptured = false;
+            GLFW.glfwSetInputMode(win, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+            screenManager.setScreen(new PauseMenuScreen(
+                screenManager,
+                // Resume
+                () -> {
+                    cursorCaptured = true;
+                    GLFW.glfwSetInputMode(win, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+                    inputHandler.resetMouseDelta();
+                },
+                // Main Menu
+                this::returnToMainMenu,
+                // Quit
+                () -> GLFW.glfwSetWindowShouldClose(win, true)
+            ));
+        } else {
+            // Cursor is free (shouldn't normally happen in-game, but recapture it)
+            cursorCaptured = true;
+            GLFW.glfwSetInputMode(win, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+        }
+    }
+
+    /**
+     * Disconnects from the current server, clears the world, and returns to the main menu.
+     * Must be called on the GL thread — mesh cleanup (GL resource deletion) happens here.
+     */
+    private void returnToMainMenu() {
+        // Disconnect network first so the server logs a clean player logout
+        if (activeNetwork != null) {
+            try { activeNetwork.disconnect(); }
+            catch (Exception e) {
+                System.err.println("[GameLoop] Disconnect error: " + e.getMessage());
+            }
+            activeNetwork = null;
+        }
+
+        // Stop the embedded server (non-blocking — server thread is daemon)
+        if (activeServer != null) {
+            activeServer.stop();
+            activeServer = null;
+        }
+
+        // Null the channel so update() guards treat this as "not in-game"
+        serverChannel = null;
+
+        // Clear all chunk data and release GL mesh resources
+        clientWorld.reset();
+
+        // Reset player and camera to neutral state
+        player = new Player(SPAWN_X, SPAWN_Y, SPAWN_Z);
+        camera.getPosition().set(SPAWN_X, SPAWN_Y + Player.EYE_HEIGHT, SPAWN_Z);
+        camera.setYaw(0);
+        camera.setPitch(0);
+        lastRaycast = RaycastResult.miss();
+
+        // Release cursor and show main menu
+        cursorCaptured = false;
+        GLFW.glfwSetInputMode(window.getWindowHandle(), GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+        screenManager.setScreen(createMainMenu());
+    }
+
+    /**
      * Shuts down all engine subsystems in reverse initialization order.
      */
     private void cleanup() {
+        // Disconnect client before stopping server — lets the server log a clean logout
+        if (activeNetwork != null) {
+            try { activeNetwork.disconnect(); }
+            catch (Exception e) { System.err.println("[GameLoop] Network disconnect error: " + e.getMessage()); }
+        }
+        if (activeServer != null) {
+            activeServer.stop();
+        }
         hudRenderer.cleanup();
         blockHighlight.cleanup();
         textureManager.cleanup();

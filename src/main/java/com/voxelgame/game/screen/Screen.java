@@ -13,6 +13,15 @@ import com.voxelgame.engine.ui.UiRenderer;
  * game state — they receive what they need via constructor injection.
  */
 public interface Screen {
+    /**
+     * Returns true if this screen renders on top of the world rather than replacing it.
+     * Full-screen menus (main menu, world select) return false (the default).
+     * Overlay screens (pause menu, inventory) return true.
+     *
+     * <p>When false: world update and render are both skipped while this screen is active.
+     * When true: world render still runs each frame; this screen draws on top.</p>
+     */
+    default boolean isOverlay() { return false; }
 
     /**
      * Called once when this screen becomes the active screen.

@@ -20,6 +20,7 @@ limits of AI-assisted development.
 | Windowing | GLFW via LWJGL |
 | Math | JOML 1.10.7 |
 | Audio | OpenAL via LWJGL |
+| Networking | Netty 4.1.115.Final |
 
 ## Building and Running
 
@@ -28,11 +29,15 @@ Prerequisites: Java 21 JDK, Git
 git clone https://github.com/Snoxyro/voxel-game.git
 cd voxel-game
 
-# Singleplayer (embedded server + client window)
+# Singleplayer (menu → world select → play)
 ./gradlew run
 
-# Dedicated headless server only
+# With username
+./gradlew run --args="--username Snoxy"
+
+# Dedicated headless server
 ./gradlew runServer
+./gradlew runServer --args="--world survival --port 25565"
 ```
 
 ### Controls
@@ -46,29 +51,33 @@ cd voxel-game
 | Left click | Break block |
 | Right click | Place block |
 | 1 / 2 / 3 | Select Grass / Dirt / Stone |
-| Escape | Release cursor |
+| Escape (in-game) | Open pause menu |
+| Escape (in menu) | Back / Resume |
 
 ## Architecture
 
 Singleplayer runs as an embedded server on localhost — identical to Minecraft's
-integrated server model. There is no separate singleplayer code path.
+integrated server model. There is no separate singleplayer code path. `GameLoop`
+owns the server lifecycle: world selection triggers a background launch thread
+that starts `GameServer`, waits for the port to bind, connects the client, then
+hands control back to the GL thread.
+
 ```
 com.voxelgame.
-├── Main.java                  ← singleplayer: embedded server + client on localhost
-├── common/                    ← shared types used by both client and server
-│   ├── world/                 ← Block, Chunk, ChunkPos, PhysicsBody, RayCaster, BlockView
-│   └── network/               ← wire protocol: packets, encoder, decoder
+├── Main.java                  ← minimal bootstrap: registries + GameLoop
+├── common/                    ← shared types: Block, BlockView, Chunk, network packets
 ├── server/                    ← headless server — zero GL/LWJGL dependency
 │   ├── GameServer.java        ← 20 TPS game loop
 │   ├── ServerWorld.java       ← chunk streaming per player
-│   ├── PlayerSession.java     ← per-client state
-│   └── network/               ← Netty pipeline, ClientHandler
-├── client/                    ← client-side logic
-│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders
-│   └── network/               ← Netty pipeline, ServerHandler
-├── engine/                    ← GL/GLFW systems — client main thread only
-│   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, etc.
-└── game/                      ← server-side gameplay
+│   └── storage/               ← FlatFileChunkStorage, WorldMeta (seed persistence)
+├── client/
+│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders; reset()
+│   └── network/
+├── engine/                    ← GL/GLFW systems — main thread only
+│   ├── ui/                    ← GlyphAtlas, UiShader, UiRenderer (batched 2D quads)
+│   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, ...
+└── game/
+    ├── screen/                ← Screen, ScreenManager, MainMenu, WorldSelect, PauseMenu
     └── World, TerrainGenerator, ChunkMesher, Player
 ```
 
@@ -79,8 +88,9 @@ Default port: **24463**.
 ## Project Structure
 ```
 src/main/java/com/voxelgame/   ← Java source
-src/main/resources/shaders/    ← GLSL shaders
+src/main/resources/shaders/    ← GLSL shaders (default, hud, ui)
 docs/                          ← Architecture decisions and design notes
+worlds/                        ← World save directories (created at runtime)
 ```
 
 ## Development Log
@@ -131,9 +141,9 @@ decisions, and lessons learned — including honest notes on AI assistance.
     - [x] 6B-1 — UI rendering foundation (GlyphAtlas, UiShader, UiRenderer)
     - [x] 6B-2 — Screen abstraction (Screen, ScreenManager, GameLoop wiring)
     - [x] 6B-3 — Main menu (Singleplayer / Multiplayer stub / Quit)
-    - [ ] 6B-4 — World selection screen
+    - [x] 6B-4 — World selection screen (list, create with seed, delete, launch)
     - [ ] 6B-5 — Multiplayer connect screen
-    - [ ] 6B-6 — In-game pause menu
+    - [x] 6B-6 — In-game pause menu (overlay, Resume / Main Menu / Quit)
     - [ ] 6B-7 — Settings stub
   - [ ] 6C — Lighting + Day/Night Cycle
   - [ ] 6D — Entity System + Player Model

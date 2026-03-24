@@ -1,5 +1,6 @@
 package com.voxelgame.game.screen;
 
+import com.voxelgame.engine.GameLoop;
 import com.voxelgame.engine.ui.GlyphAtlas;
 import com.voxelgame.engine.ui.UiRenderer;
 import com.voxelgame.engine.ui.UiShader;
@@ -56,6 +57,11 @@ public final class ScreenManager {
     /** Returns true when a screen is active and the game loop should yield to it. */
     public boolean hasActiveScreen() {
         return activeScreen != null;
+    }
+
+    /** Returns true if the active screen is an overlay (renders over the world). */
+    public boolean isActiveScreenOverlay() {
+        return activeScreen != null && activeScreen.isOverlay();
     }
 
     // -------------------------------------------------------------------------

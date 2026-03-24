@@ -216,6 +216,31 @@ public final class UiRenderer {
     }
 
     /**
+     * Returns the rendered pixel width of {@code text}.
+     * Use this instead of {@code text.length() * someConstant} — actual advance
+     * widths come from the AWT font metrics baked into the atlas.
+     *
+     * @param text the string to measure
+     * @return width in pixels
+     */
+    public int measureText(String text) {
+        return glyphAtlas.measureText(text);
+    }
+
+    /**
+     * Draws text horizontally centered around {@code centerX}.
+     * Prefer this over computing {@code leftX = centerX - measureText/2} manually
+     * — it eliminates the centering formula from every caller.
+     *
+     * @param centerX horizontal center of the text in pixels
+     * @param y       top of the text in pixels
+     */
+    public void drawCenteredText(float centerX, float y, String text,
+                                float r, float g, float b, float a) {
+        drawText(centerX - measureText(text) / 2.0f, y, text, r, g, b, a);
+    }
+
+    /**
      * Frees all GL resources used by the renderer and releases direct buffers.
      */
     public void cleanup() {
