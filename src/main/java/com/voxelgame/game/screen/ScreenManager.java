@@ -127,13 +127,14 @@ public final class ScreenManager {
      * Renders the active screen for this frame using the active theme.
      * Must be called on the main (GL) thread.
      *
-     * @param screenW framebuffer width in pixels
-     * @param screenH framebuffer height in pixels
+     * @param deltaTime seconds elapsed since the last frame
+     * @param screenW   framebuffer width in pixels
+     * @param screenH   framebuffer height in pixels
      */
-    public void renderActiveScreen(int screenW, int screenH) {
+    public void renderActiveScreen(float deltaTime, int screenW, int screenH) {
         if (activeScreen == null) return;
         activeTheme.begin(screenW, screenH);
-        activeScreen.render(activeTheme, screenW, screenH);
+        activeScreen.render(activeTheme, deltaTime, screenW, screenH);
         activeTheme.end();
     }
 

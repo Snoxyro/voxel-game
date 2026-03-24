@@ -3,6 +3,7 @@ package com.voxelgame;
 import com.voxelgame.client.ClientWorld;
 import com.voxelgame.common.world.Blocks;
 import com.voxelgame.engine.GameLoop;
+import com.voxelgame.game.GameSettings;
 
 /**
  * Singleplayer entry point.
@@ -16,12 +17,10 @@ public class Main {
     public static void main(String[] args) {
         Blocks.bootstrap();
 
-        String username = "Player";
-        for (int i = 0; i < args.length - 1; i++) {
-            if (args[i].equals("--username")) username = args[i + 1];
-        }
+        GameSettings settings = new GameSettings(java.nio.file.Path.of("settings.properties"));
+        settings.load();
 
         ClientWorld clientWorld = new ClientWorld();
-        new GameLoop(clientWorld, username).run();
+        new GameLoop(clientWorld, settings).run();
     }
 }

@@ -155,7 +155,7 @@ public class MultiplayerConnectScreen implements Screen {
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     @Override
-    public void render(UiTheme theme, int sw, int sh) {
+    public void render(UiTheme theme, float deltaTime, int screenWidth, int screenHeight) {
         double[] cx = {0}, cy = {0};
         GLFW.glfwGetCursorPos(GLFW.glfwGetCurrentContext(), cx, cy);
         mouseX = (int) cx[0];
@@ -165,14 +165,14 @@ public class MultiplayerConnectScreen implements Screen {
         charPixelWidth = Math.max(1, theme.measureText("X"));
 
         // Advance blink timer (~60 FPS fixed step; exact rate not critical for a blink)
-        caretBlinkTimer += 0.016f;
+        caretBlinkTimer += deltaTime;
         if (caretBlinkTimer >= CARET_BLINK_INTERVAL) {
             caretBlinkTimer -= CARET_BLINK_INTERVAL;
             caretVisible = !caretVisible;
         }
 
-        int panelX = (sw - PANEL_W) / 2;
-        int panelY = (sh - PANEL_H) / 2;
+        int panelX = (screenWidth - PANEL_W) / 2;
+        int panelY = (screenHeight - PANEL_H) / 2;
         int fieldX = panelX + PAD;
         int fieldW = PANEL_W - PAD * 2;
 
@@ -228,9 +228,9 @@ public class MultiplayerConnectScreen implements Screen {
     public void onMouseClick(int x, int y, int button) {
         if (button != GLFW.GLFW_MOUSE_BUTTON_LEFT) return;
 
-        int sw = getScreenWidth(), sh = getScreenHeight();
-        int panelX = (sw - PANEL_W) / 2;
-        int panelY = (sh - PANEL_H) / 2;
+        int screenWidth = getScreenWidth(), screenHeight = getScreenHeight();
+        int panelX = (screenWidth - PANEL_W) / 2;
+        int panelY = (screenHeight - PANEL_H) / 2;
         int fieldX = panelX + PAD;
         int fieldW = PANEL_W - PAD * 2;
 

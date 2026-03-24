@@ -39,10 +39,12 @@ public interface Screen {
      * Renders the screen for one frame.
      *
      * @param theme        the active {@link UiTheme}
+     * @param deltaTime    seconds elapsed since the last frame — use for animations
+     *                     and timers instead of hardcoded frame-rate assumptions
      * @param screenWidth  current framebuffer width in pixels
      * @param screenHeight current framebuffer height in pixels
      */
-    void render(UiTheme theme, int screenWidth, int screenHeight);
+    void render(UiTheme theme, float deltaTime, int screenWidth, int screenHeight);
 
     /**
      * Handles a mouse button press.

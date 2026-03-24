@@ -6,6 +6,9 @@ import com.voxelgame.common.world.BlockType;
 import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.RayCaster;
 import com.voxelgame.common.world.RaycastResult;
+import com.voxelgame.game.Action;
+import com.voxelgame.game.GameSettings;
+import com.voxelgame.game.KeyBindings;
 import com.voxelgame.game.Player;
 import com.voxelgame.game.screen.MainMenuScreen;
 import com.voxelgame.game.screen.MultiplayerConnectScreen;
@@ -41,7 +44,6 @@ public class GameLoop {
     private static final int   TARGET_UPS        = 60;
     private static final float DELTA_TIME        = 1.0f / TARGET_UPS;
     private static final float FREECAM_SPEED     = 1.50f;
-    private static final float MOUSE_SENSITIVITY = 0.1f;
 
     /** Maximum block interaction range in blocks. */
     private static final float REACH = 5.0f;
@@ -56,7 +58,8 @@ public class GameLoop {
 
     private final Window      window;
     private final ClientWorld clientWorld;
-    private final String username;
+    /** Persistent user settings — owns keybindings, render distance, FOV, etc. */
+    private final GameSettings settings;
 
     // Volatile: written by the world-launch background thread, read by the GL thread.
     // Null until the player selects a world and the server is ready.
@@ -89,6 +92,10 @@ public class GameLoop {
     private boolean       lastFKeyDown   = false;
     private int[]         lastRenderStats = { 0, 0 };
     private ScreenManager screenManager;
+    /** Timestamp of the previous frame start — used to compute per-frame delta time. */
+    private long          lastFrameTime = System.nanoTime();
+    /** Last computed frame delta — stored so the window refresh callback can use it. */
+    private float         lastDeltaTime = 0.016f; // sensible default before first frame
 
     // GLFW event callbacks — must be stored as fields to prevent garbage collection.
     // LWJGL registers these with native GLFW; if the JVM GC collects them, the
@@ -102,12 +109,12 @@ public class GameLoop {
      *
      * @param clientWorld the client-side world — receives chunks from the server,
      *                    provides block queries for physics and raycasting
-     * @param username    the local player's username — used when connecting to the server
+     * @param settings    the game settings, including key bindings and video options
      */
-    public GameLoop(ClientWorld clientWorld, String username) {
+    public GameLoop(ClientWorld clientWorld, GameSettings settings) {
         this.window      = new Window("Voxel Game", 1280, 720);
         this.clientWorld = clientWorld;
-        this.username    = username;
+        this.settings    = settings;
     }
 
     /**
@@ -174,7 +181,7 @@ public class GameLoop {
                 }
 
                 ClientNetworkManager network = new ClientNetworkManager(
-                    "localhost", GameServer.PORT, username, clientWorld
+                    "localhost", GameServer.PORT, settings.getUsername(), clientWorld
                 );
                 network.connect();
 
@@ -223,8 +230,7 @@ public class GameLoop {
      */
     private void connectToMultiplayer(String host, int port, AtomicBoolean cancelledFlag, Consumer<String> onFailure) {
         Thread connectThread = new Thread(() -> {
-            ClientNetworkManager network =
-                    new ClientNetworkManager(host, port, username, clientWorld);
+            ClientNetworkManager network = new ClientNetworkManager(host, port, settings.getUsername(), clientWorld);
             try {
                 network.connect(); // blocks until TCP handshake completes or throws
 
@@ -304,6 +310,12 @@ public class GameLoop {
      */
     private void init() {
         window.init();
+
+        // Apply VSync from settings — this is why FPS was locked before:
+        // glfwSwapInterval(1) was hardcoded with no way to change it.
+        GLFW.glfwSwapInterval(settings.isVsync() ? 1 : 0);
+        applyWindowMode(settings.getWindowMode());
+
         clientWorld.initRenderResources();
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glEnable(GL11.GL_CULL_FACE);
@@ -311,6 +323,7 @@ public class GameLoop {
         lastFbWidth  = window.getFramebufferWidth();
         lastFbHeight = window.getFramebufferHeight();
         camera = new Camera(lastFbWidth, lastFbHeight);
+        camera.setFov(settings.getFov());  // apply saved FOV
         camera.getPosition().set(SPAWN_X, SPAWN_Y + Player.EYE_HEIGHT, SPAWN_Z);
 
         inputHandler = new InputHandler(window.getWindowHandle());
@@ -375,13 +388,13 @@ public class GameLoop {
             if (screenManager.hasActiveScreen() && !screenManager.isActiveScreenOverlay()) {
                 // Full-screen menu — clear and render only the menu
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
-                screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+                screenManager.renderActiveScreen(lastDeltaTime, window.getFramebufferWidth(), window.getFramebufferHeight());
             } else {
                 // Normal world render (runs for both in-game and overlay-menu-over-world)
                 render();
                 if (screenManager.hasActiveScreen()) {
                     // Overlay screen draws on top of the just-rendered world
-                    screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+                    screenManager.renderActiveScreen(lastDeltaTime, window.getFramebufferWidth(), window.getFramebufferHeight());
                 }
             }
             window.swapBuffers();
@@ -412,6 +425,12 @@ public class GameLoop {
         double diagnosticTimer = System.currentTimeMillis();
 
         while (!window.shouldClose()) {
+            // Clamp to 100ms max — prevents a massive spike on the first frame or after
+            // a lag hitch from trickling into timers and animations downstream.
+            long now = System.nanoTime();
+            lastDeltaTime = Math.min((now - lastFrameTime) / 1_000_000_000f, 0.1f);
+            lastFrameTime = now;
+
             window.pollEvents();
 
             // Drain any action posted from a background thread (e.g. world launch done)
@@ -440,13 +459,13 @@ public class GameLoop {
             if (screenManager.hasActiveScreen() && !screenManager.isActiveScreenOverlay()) {
                 // Full-screen menu — clear and render only the menu
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
-                screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+                screenManager.renderActiveScreen(lastDeltaTime, window.getFramebufferWidth(), window.getFramebufferHeight());
             } else {
                 // Normal world render (runs for both in-game and overlay-menu-over-world)
                 render();
                 if (screenManager.hasActiveScreen()) {
                     // Overlay screen draws on top of the just-rendered world
-                    screenManager.renderActiveScreen(window.getFramebufferWidth(), window.getFramebufferHeight());
+                    screenManager.renderActiveScreen(lastDeltaTime, window.getFramebufferWidth(), window.getFramebufferHeight());
                 }
             }
             frames++;
@@ -465,6 +484,39 @@ public class GameLoop {
 
             window.swapBuffers();
         }
+    }
+
+    /**
+     * Returns true while the key or mouse button bound to {@code action} is held.
+     * Returns false if the action is unbound.
+     */
+    private boolean isActionDown(Action action) {
+        int code = settings.getKeyBindings().get(action);
+        if (code == KeyBindings.UNBOUND) return false;
+        if (KeyBindings.isMouse(code)) {
+            return inputHandler.isMouseButtonDown(KeyBindings.rawMouseButton(code));
+        }
+        return inputHandler.isKeyDown(code);
+    }
+
+    /**
+     * Returns true on the single frame where the key or mouse button bound to
+     * {@code action} just transitioned from up to down.
+     * Returns false if the action is unbound.
+     */
+    private boolean wasActionJustPressed(Action action) {
+        int code = settings.getKeyBindings().get(action);
+        if (code == KeyBindings.UNBOUND) return false;
+        if (KeyBindings.isMouse(code)) {
+            return inputHandler.wasMouseButtonJustPressed(KeyBindings.rawMouseButton(code));
+        }
+        // Keyboard — use GLFW directly for edge detection since InputHandler
+        // only exposes isKeyDown (held), not just-pressed for arbitrary keys.
+        // We track this ourselves with a small set if needed; for now keyboard
+        // actions that need edge detection use a lastKeyDown field per action.
+        // Movement keys only need isKeyDown so this path is currently only
+        // needed for TOGGLE_FREECAM — which already has lastFKeyDown handling below.
+        return false;
     }
 
     /**
@@ -494,7 +546,7 @@ public class GameLoop {
         //    GLFW.glfwSetInputMode(window.getWindowHandle(),
         //        GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
         //}
-        if (inputHandler.wasMouseLeftClicked() && !cursorCaptured) {
+        if (inputHandler.wasMouseButtonJustPressed(GLFW.GLFW_MOUSE_BUTTON_LEFT) && !cursorCaptured) {
             cursorCaptured = true;
             GLFW.glfwSetInputMode(window.getWindowHandle(),
                 GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
@@ -503,14 +555,16 @@ public class GameLoop {
 
         // --- Mouse look ---
         if (cursorCaptured) {
-            float yaw   = camera.getYaw()   + inputHandler.getMouseDeltaX() * MOUSE_SENSITIVITY;
-            float pitch = camera.getPitch() - inputHandler.getMouseDeltaY() * MOUSE_SENSITIVITY;
+            float sens  = settings.getMouseSensitivity();
+            float yaw   = camera.getYaw()   + inputHandler.getMouseDeltaX() * sens;
+            float pitch = camera.getPitch() - inputHandler.getMouseDeltaY() * sens;
             camera.setYaw(yaw);
             camera.setPitch(pitch);
         }
 
         // --- Freecam toggle ---
-        boolean fKeyDown = inputHandler.isKeyDown(GLFW.GLFW_KEY_F);
+        int freecamCode  = settings.getKeyBindings().get(Action.TOGGLE_FREECAM);
+        boolean fKeyDown = freecamCode != KeyBindings.UNBOUND && inputHandler.isKeyDown(freecamCode);
         if (fKeyDown && !lastFKeyDown) {
             freecam = !freecam;
             if (freecam) {
@@ -530,20 +584,21 @@ public class GameLoop {
 
         if (freecam) {
             Vector3f pos = camera.getPosition();
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_W)) { pos.x += cosYaw * FREECAM_SPEED; pos.z += sinYaw * FREECAM_SPEED; }
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_S)) { pos.x -= cosYaw * FREECAM_SPEED; pos.z -= sinYaw * FREECAM_SPEED; }
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_A)) { pos.x += sinYaw * FREECAM_SPEED; pos.z -= cosYaw * FREECAM_SPEED; }
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_D)) { pos.x -= sinYaw * FREECAM_SPEED; pos.z += cosYaw * FREECAM_SPEED; }
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_SPACE))      pos.y += FREECAM_SPEED;
+            if (isActionDown(Action.MOVE_FORWARD))  { pos.x += cosYaw * FREECAM_SPEED; pos.z += sinYaw * FREECAM_SPEED; }
+            if (isActionDown(Action.MOVE_BACKWARD)) { pos.x -= cosYaw * FREECAM_SPEED; pos.z -= sinYaw * FREECAM_SPEED; }
+            if (isActionDown(Action.MOVE_LEFT))     { pos.x += sinYaw * FREECAM_SPEED; pos.z -= cosYaw * FREECAM_SPEED; }
+            if (isActionDown(Action.MOVE_RIGHT))    { pos.x -= sinYaw * FREECAM_SPEED; pos.z += cosYaw * FREECAM_SPEED; }
+            if (isActionDown(Action.JUMP))          pos.y += FREECAM_SPEED;
+            // Left shift for fly-down stays hardcoded — it has no Action yet, it's not a bound action
             if (inputHandler.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT)) pos.y -= FREECAM_SPEED;
         } else {
             float moveX = 0, moveZ = 0;
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_W)) { moveX += cosYaw; moveZ += sinYaw; }
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_S)) { moveX -= cosYaw; moveZ -= sinYaw; }
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_A)) { moveX += sinYaw; moveZ -= cosYaw; }
-            if (inputHandler.isKeyDown(GLFW.GLFW_KEY_D)) { moveX -= sinYaw; moveZ += cosYaw; }
+            if (isActionDown(Action.MOVE_FORWARD))  { moveX += cosYaw; moveZ += sinYaw; }
+            if (isActionDown(Action.MOVE_BACKWARD)) { moveX -= cosYaw; moveZ -= sinYaw; }
+            if (isActionDown(Action.MOVE_LEFT))     { moveX += sinYaw; moveZ -= cosYaw; }
+            if (isActionDown(Action.MOVE_RIGHT))    { moveX -= sinYaw; moveZ += cosYaw; }
 
-            boolean wantsJump = inputHandler.isKeyDown(GLFW.GLFW_KEY_SPACE);
+            boolean wantsJump = isActionDown(Action.JUMP);
             player.update(moveX, moveZ, wantsJump, clientWorld, DELTA_TIME);
             camera.getPosition().set(player.getEyePosition());
         }
@@ -576,12 +631,11 @@ public class GameLoop {
 
         // --- Block interaction ---
         if (cursorCaptured && lastRaycast.hit()) {
-            if (inputHandler.wasMouseLeftClicked()) {
+            if (wasActionJustPressed(Action.BREAK_BLOCK)) {
                 if (serverChannel != null) serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockBreakPacket(
                     lastRaycast.blockX(), lastRaycast.blockY(), lastRaycast.blockZ()));
             }
-            if (inputHandler.wasMouseRightClicked()) {
-                // Guard: don't place a block inside the player (physics mode only)
+            if (wasActionJustPressed(Action.PLACE_BLOCK)) {
                 int px = lastRaycast.placeX(), py = lastRaycast.placeY(), pz = lastRaycast.placeZ();
                 if (freecam || !player.getBody().overlapsBlock(px, py, pz)) {
                     if (serverChannel != null) serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockPlacePacket(
@@ -701,6 +755,54 @@ public class GameLoop {
         cursorCaptured = false;
         GLFW.glfwSetInputMode(window.getWindowHandle(), GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
         screenManager.setScreen(createMainMenu());
+    }
+
+    /**
+     * Applies the window display mode from settings.
+     * Must be called on the main (GL) thread.
+     *
+     * @param mode the desired window mode
+     */
+    private void applyWindowMode(GameSettings.WindowMode mode) {
+        long monitor = GLFW.glfwGetPrimaryMonitor();
+        long win     = window.getWindowHandle();
+
+        switch (mode) {
+            case FULLSCREEN -> {
+                // True fullscreen — switches the monitor's video mode.
+                // Uses the monitor's current (native) resolution.
+                org.lwjgl.glfw.GLFWVidMode vid = GLFW.glfwGetVideoMode(monitor);
+                if (vid != null) {
+                    GLFW.glfwSetWindowMonitor(win, monitor, 0, 0,
+                        vid.width(), vid.height(), vid.refreshRate());
+                }
+            }
+            case BORDERLESS -> {
+                // Borderless windowed — remove decoration and maximize to cover the screen.
+                org.lwjgl.glfw.GLFWVidMode vid = GLFW.glfwGetVideoMode(monitor);
+                if (vid != null) {
+                    GLFW.glfwSetWindowAttrib(win, GLFW.GLFW_DECORATED, GLFW.GLFW_FALSE);
+                    GLFW.glfwSetWindowPos(win, 0, 0);
+                    GLFW.glfwSetWindowSize(win, vid.width(), vid.height());
+                }
+            }
+            case WINDOWED -> {
+                // Restore decorated window. Use a sensible default size.
+                GLFW.glfwSetWindowAttrib(win, GLFW.GLFW_DECORATED, GLFW.GLFW_TRUE);
+                GLFW.glfwSetWindowMonitor(win, 0, 100, 100, 1280, 720, GLFW.GLFW_DONT_CARE);
+            }
+        }
+    }
+
+    /**
+     * Returns true when the player is in an active game session (singleplayer or
+     * multiplayer). Settings that cannot change mid-session (e.g. username) use
+     * this to lock their widgets.
+     *
+     * @return true if a server channel is open
+     */
+    public boolean isSessionActive() {
+        return serverChannel != null;
     }
 
     /**

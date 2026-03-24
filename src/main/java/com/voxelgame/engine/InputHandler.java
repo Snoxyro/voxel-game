@@ -23,13 +23,10 @@ public class InputHandler {
     /** True on the very first update() call — used to skip the initial cursor jump. */
     private boolean firstUpdate = true;
 
-    // Mouse button state — track previous frame to detect "just pressed" transitions
-    private boolean lastMouseLeft  = false;
-    private boolean lastMouseRight = false;
-
-    /** True only on the single frame where the button transitioned from up to down. */
-    private boolean mouseLeftJustPressed  = false;
-    private boolean mouseRightJustPressed = false;
+    /** GLFW supports mouse buttons 0–7. Track previous and just-pressed state for all. */
+    private static final int MOUSE_BUTTON_COUNT = 8;
+    private final boolean[] lastMouseButtons       = new boolean[MOUSE_BUTTON_COUNT];
+    private final boolean[] mouseButtonJustPressed = new boolean[MOUSE_BUTTON_COUNT];
 
     /**
      * Creates an InputHandler for the given GLFW window.
@@ -80,18 +77,12 @@ public class InputHandler {
             MemoryUtil.memFree(yBuffer);
         }
 
-        // --- Mouse button edge detection ---
-        // A "just pressed" event fires only on the frame the button goes down,
-        // not every frame it is held. This prevents holding a button from
-        // rapidly placing/breaking many blocks.
-        boolean curLeft  = GLFW.glfwGetMouseButton(windowHandle, GLFW.GLFW_MOUSE_BUTTON_LEFT)  == GLFW.GLFW_PRESS;
-        boolean curRight = GLFW.glfwGetMouseButton(windowHandle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
-
-        mouseLeftJustPressed  = curLeft  && !lastMouseLeft;
-        mouseRightJustPressed = curRight && !lastMouseRight;
-
-        lastMouseLeft  = curLeft;
-        lastMouseRight = curRight;
+        // --- Mouse button edge detection (all 8 GLFW buttons) ---
+        for (int i = 0; i < MOUSE_BUTTON_COUNT; i++) {
+            boolean cur = GLFW.glfwGetMouseButton(windowHandle, i) == GLFW.GLFW_PRESS;
+            mouseButtonJustPressed[i] = cur && !lastMouseButtons[i];
+            lastMouseButtons[i] = cur;
+        }
     }
 
     /**
@@ -105,23 +96,26 @@ public class InputHandler {
     }
 
     /**
-     * Returns true on the single frame where the left mouse button was pressed.
-     * Use for block breaking — prevents holding the button from rapid-firing.
+     * Returns true on the single frame where the given mouse button was pressed.
+     * Use for block interaction — prevents holding from rapid-firing.
      *
-     * @return true if the left button just transitioned from up to down
+     * @param glfwButton a {@code GLFW_MOUSE_BUTTON_*} constant (0–7)
+     * @return true if the button just transitioned from up to down
      */
-    public boolean wasMouseLeftClicked() {
-        return mouseLeftJustPressed;
+    public boolean wasMouseButtonJustPressed(int glfwButton) {
+        if (glfwButton < 0 || glfwButton >= MOUSE_BUTTON_COUNT) return false;
+        return mouseButtonJustPressed[glfwButton];
     }
 
     /**
-     * Returns true on the single frame where the right mouse button was pressed.
-     * Use for block placement.
+     * Returns true while the given mouse button is held down.
      *
-     * @return true if the right button just transitioned from up to down
+     * @param glfwButton a {@code GLFW_MOUSE_BUTTON_*} constant (0–7)
+     * @return true if the button is currently pressed
      */
-    public boolean wasMouseRightClicked() {
-        return mouseRightJustPressed;
+    public boolean isMouseButtonDown(int glfwButton) {
+        if (glfwButton < 0 || glfwButton >= MOUSE_BUTTON_COUNT) return false;
+        return GLFW.glfwGetMouseButton(windowHandle, glfwButton) == GLFW.GLFW_PRESS;
     }
 
     /**

@@ -78,7 +78,7 @@ public class MainMenuScreen implements Screen {
     // -------------------------------------------------------------------------
 
     @Override
-    public void render(UiTheme theme, int sw, int sh) {
+    public void render(UiTheme theme, float deltaTime, int screenWidth, int screenHeight) {
         // --- Poll cursor position each frame for hover detection ---
         // We read this here rather than in onMouseClick so hover highlights
         // update smoothly as the cursor moves.
@@ -88,11 +88,11 @@ public class MainMenuScreen implements Screen {
         mouseY = (int) cy[0];
 
         // --- Layout: compute positions relative to screen center ---
-        int panelX = (sw - PANEL_W) / 2;
-        int panelY = (sh - PANEL_H) / 2;
+        int panelX = (screenWidth - PANEL_W) / 2;
+        int panelY = (screenHeight - PANEL_H) / 2;
 
         // Three buttons stacked vertically, centered inside the panel
-        int btnX = (sw - BUTTON_W) / 2;
+        int btnX = (screenWidth - BUTTON_W) / 2;
         // First button starts 80px from panel top (leaves room for title)
         int btn1Y = panelY + 80;
         int btn2Y = btn1Y + BUTTON_H + BUTTON_GAP;

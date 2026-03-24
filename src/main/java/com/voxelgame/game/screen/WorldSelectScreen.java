@@ -138,14 +138,14 @@ public class WorldSelectScreen implements Screen {
     // -------------------------------------------------------------------------
 
     @Override
-    public void render(UiTheme theme, int sw, int sh) {
+    public void render(UiTheme theme, float deltaTime, int screenWidth, int screenHeight) {
         double[] cx = {0}, cy = {0};
         GLFW.glfwGetCursorPos(GLFW.glfwGetCurrentContext(), cx, cy);
         mouseX = (int) cx[0];
         mouseY = (int) cy[0];
 
-        int panelX = (sw - PANEL_W) / 2;
-        int panelY = (sh - PANEL_H) / 2;
+        int panelX = (screenWidth - PANEL_W) / 2;
+        int panelY = (screenHeight - PANEL_H) / 2;
 
         // Background
         theme.drawPanel(panelX, panelY, PANEL_W, PANEL_H);
@@ -156,7 +156,7 @@ public class WorldSelectScreen implements Screen {
 
         switch (mode) {
             case LIST           -> renderList(theme, panelX, panelY);
-            case CREATE_NEW     -> renderCreate(theme, panelX, panelY);
+            case CREATE_NEW     -> renderCreate(theme, deltaTime, panelX, panelY);
             case CONFIRM_DELETE -> renderDelete(theme, panelX, panelY);
             case LAUNCHING      -> renderLaunching(theme, panelX, panelY);
         }
@@ -199,7 +199,7 @@ public class WorldSelectScreen implements Screen {
             hits(mouseX, mouseY, btnRowX + btnW + BTN_GAP, row2Y, btnW, BTN_H));
     }
 
-    private void renderCreate(UiTheme theme, int panelX, int panelY) {
+    private void renderCreate(UiTheme theme, float deltaTime, int panelX, int panelY) {
         nameCaretPos = Math.min(nameCaretPos, newWorldName.length());
         seedCaretPos = Math.min(seedCaretPos, newWorldSeed.length());
         charPixelWidth = theme.measureText("X");
@@ -207,7 +207,7 @@ public class WorldSelectScreen implements Screen {
         // Advance blink timer — getDeltaTime() not available here, so we approximate
         // using a fixed frame budget. At ~60 FPS each frame is ~16ms = 0.016s.
         // Good enough for a blink effect; no need for exact timing.
-        caretBlinkTimer += 0.016f;
+        caretBlinkTimer += deltaTime;
         if (caretBlinkTimer >= CARET_BLINK_INTERVAL) {
             caretBlinkTimer -= CARET_BLINK_INTERVAL;
             caretVisible = !caretVisible;

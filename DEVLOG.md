@@ -2805,6 +2805,270 @@ Deferred to the next session — do this before any other work.
 
 ---
 
+## Entry 048 — Phase 6B-7 Roadmap: Settings System
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Decided
+
+6B-7 expands from "settings stub" to a full settings system. This entry documents
+the complete design so any future Claude session can resume without losing context.
+No code was written yet.
+
+---
+
+### Scope
+
+Settings are accessible from both the main menu and the pause menu while in-game.
+Some settings are locked while a session is active (e.g. username cannot change
+while connected to a server). Settings persist to `settings.properties` in the
+working directory alongside the `worlds/` folder.
+
+---
+
+### Architecture
+
+**`GameSettings.java`** — `game/` package.
+Owned by `GameLoop`, passed via constructor injection to every screen that needs it.
+Never a static singleton — mods in Phase 7 will have their own `GameSettings`
+instances pointing to different `.properties` files. Uses `java.util.Properties` for
+persistence. Typed getters/setters per setting. `load()` fills all fields from file,
+falling back to defaults for any missing key. `save()` writes all fields atomically.
+Methods: `load(Path)`, `save(Path)`, typed getters/setters per field.
+
+**`KeyBindings.java`** — `game/` package (GLFW-only, client-side).
+Wraps an `EnumMap<Action, Integer>` mapping every bindable `Action` to a GLFW key or
+mouse button code. `getKey(Action)` replaces all hardcoded `GLFW.GLFW_KEY_*` literals
+in `GameLoop`. Unbinding is represented as `GLFW_KEY_UNKNOWN` (-1) — the action simply
+never fires. Serialized as `keybind.MOVE_FORWARD=87` etc. in `settings.properties`.
+
+**`Action.java`** — `game/` package. Enum of all bindable actions:
+`MOVE_FORWARD`, `MOVE_BACKWARD`, `MOVE_LEFT`, `MOVE_RIGHT`, `JUMP`,
+`BREAK_BLOCK`, `PLACE_BLOCK`, `TOGGLE_FREECAM`, `OPEN_CHAT` (stub — chat not yet built).
+
+**`SettingsScreen.java`** — `game/screen/`. Tabbed layout.
+Tabs: `GAMEPLAY`, `GRAPHICS`, `DISPLAY`, `CONTROLS`, `KEYBINDS`, `SOUND`.
+Each tab renders a scrollable list of setting rows. Every row has:
+- Label
+- Widget (see widget types below)
+- "Reset to default" button (small, right-aligned per row)
+- Dirty highlight: row background tints yellow-orange if value differs from saved state
+- For keybind rows: conflict highlight (yellow text + warning icon) if two actions share
+  the same key
+
+Tab header shows a warning badge (⚠) if any row in that tab has a conflict or
+validation error. Currently only `KEYBINDS` can produce this state.
+
+Save / Cancel buttons at the bottom of the screen, always visible regardless of
+active tab. Save writes to disk and applies live settings. Cancel discards all
+pending changes and restores last-saved values. Both dismiss the screen.
+
+**Widget types implemented in SettingsScreen:**
+- Text field (username)
+- Slider with min/max/step (render distance, FOV, mouse sensitivity)
+- Toggle button / on-off (VSync)
+- Dropdown (UI theme, window mode) — rendered as a button that cycles through options
+  since no full dropdown widget exists yet; full dropdown deferred until a widget is built
+- Key selector (all keybinds) — click to enter listening mode ("Press any key…"),
+  press a key to bind, press Escape or click X button to unbind (sets to UNKNOWN)
+
+**Settings locked while a session is active:**
+- Username (Gameplay tab): rendered as a disabled/greyed text field with a label
+  "(active session)" when `GameLoop.isSessionActive()` is true.
+
+---
+
+### Full Settings Inventory
+
+| Tab       | Setting          | Widget                      | Live? | Locked in session? |
+|-----------|------------------|-----------------------------|-------|--------------------|
+| Gameplay  | Username         | Text field                  | No    | Yes                |
+| Graphics  | Render Distance  | Slider (2–32)               | Yes   | No                 |
+| Graphics  | FOV              | Slider (50–110°)            | Yes   | No                 |
+| Graphics  | UI Theme         | Dropdown (Dark / Light)     | Yes   | No                 |
+| Display   | VSync            | Toggle                      | Yes   | No                 |
+| Display   | Window Mode      | Dropdown (Windowed / Fullscreen / Borderless) | Yes | No     |
+| Display   | Resolution       | Dropdown (monitor modes)    | Defer | No                 |
+| Controls  | Mouse Sensitivity| Slider (0.01–2.0)           | Yes   | No                 |
+| Keybinds  | Move Forward     | Key selector                | —     | No                 |
+| Keybinds  | Move Backward    | Key selector                | —     | No                 |
+| Keybinds  | Move Left        | Key selector                | —     | No                 |
+| Keybinds  | Move Right       | Key selector                | —     | No                 |
+| Keybinds  | Jump             | Key selector                | —     | No                 |
+| Keybinds  | Break Block      | Key selector                | —     | No                 |
+| Keybinds  | Place Block      | Key selector                | —     | No                 |
+| Keybinds  | Freecam Toggle   | Key selector                | —     | No                 |
+| Keybinds  | Open Chat        | Key selector (stub)         | —     | No                 |
+| Sound     | (stub — no audio yet) | —                      | —     | —                  |
+
+Resolution dropdown deferred — requires enumerating monitor video modes via
+`glfwGetVideoModes` and a real dropdown widget neither of which exists yet.
+
+---
+
+### Live Render Distance — Delta Approach
+
+Decreasing render distance: explicit unload sweep — iterate loaded chunks, unload any
+whose Chebyshev distance from every viewer exceeds the new radius. `World` already has
+the unload path; it needs to be triggerable on-demand (not just from the scheduler).
+Increasing render distance: automatic — next `scheduleNeededChunks` tick picks up the
+new outer ring with no extra code.
+Result: same behavior as Minecraft's slider without a full reload.
+
+---
+
+### Delta Time Fix (bundled with 6B-7)
+
+`Screen.render()` signature changes from `(UiTheme, int, int)` to
+`(UiTheme, float deltaTime, int, int)`. `GameLoop` computes `deltaTime` for physics
+already — same value forwarded to `screenManager.renderActiveScreen(...)`.
+All `caretBlinkTimer += 0.016f` hardcoded lines replaced with `+= deltaTime`.
+Fixes caret blink speed drift at non-60 FPS frame rates.
+This is a one-line change per screen but touches every screen class and the `Screen`
+interface.
+
+---
+
+### VSync Fix (bundled with 6B-7)
+
+`glfwSwapInterval(vsync ? 1 : 0)` called immediately on save when VSync setting
+changes. This is why the FPS is currently locked — `glfwSwapInterval(1)` is
+called at init with no way to change it. Once the setting exists, the default will
+be stored in `settings.properties` and can be overridden.
+
+---
+
+### Deferred — Server Global Chat (TODO)
+
+Not part of 6B-7. Recorded here for future planning.
+
+- Keybind: `Action.OPEN_CHAT` (Enter) — stub registered in `KeyBindings` now,
+  screen implementation deferred.
+- Rendering: semi-transparent overlay at bottom of screen. `ChatScreen` extends
+  overlay — world still visible behind it.
+- History: circular buffer of last N messages, scrollable with mouse wheel.
+- Packets: `ChatMessageSBPacket` (client→server: message string),
+  `ChatMessageCBPacket` (server→all: username + message + timestamp).
+- Commands: `/command` prefix detection deferred — needs a `CommandDispatcher`
+  pattern, which is a Phase 7 modding concern.
+
+---
+
+### Implementation Order
+
+1. Delta time fix — `Screen` interface change, all existing screens updated.
+2. `Action.java` + `KeyBindings.java` — data types, no wiring yet.
+3. `GameSettings.java` — load/save, all fields, defaults.
+4. `GameLoop` wiring — replace all hardcoded constants with settings reads,
+   VSync call, window mode logic, `isSessionActive()` helper.
+5. `World` render distance — make `RENDER_DISTANCE_H` live-readable, add
+   on-demand unload sweep.
+6. `SettingsScreen.java` — full tabbed UI.
+7. Wire `SettingsScreen` into `MainMenuScreen` and `PauseMenuScreen`.
+
+Steps 1–5 are data and engine changes. Step 6 is the large UI build.
+Step 6 will likely be delegated to Copilot with a structured prompt given the
+mechanical but voluminous nature of the widget rendering code.
+
+---
+
+### Decisions Made
+- `GameSettings` owned by `GameLoop`, passed via constructor — not a static singleton.
+  Mod settings in Phase 7 will use separate `GameSettings` instances per mod.
+- `KeyBindings` lives in `game/` — references GLFW constants, client-only.
+- Unbinding represented as `GLFW_KEY_UNKNOWN` (-1). An unbound action simply never
+  fires — no special-case code needed in `GameLoop`.
+- Duplicate keybind detection: warn on all conflicting rows, allow save anyway.
+  Same behavior as Minecraft — lets players reassign a chain of keys without being
+  blocked mid-way.
+- Tab-level warning badge only wired to `KEYBINDS`. Other tabs have no invalid states.
+  Infrastructure supports it for future mod settings with validation.
+- Resolution picker deferred until a dropdown widget exists.
+- VSync default: enabled. Stored in `settings.properties`, overridable.
+- Window mode default: Windowed.
+
+---
+
+## Entry 049 — Phase 6B-7 (Partial): Settings Data Layer
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+- Added `deltaTime` parameter to `Screen.render()` interface — signature is now
+  `render(UiTheme, float deltaTime, int w, int h)`. All screen implementations
+  updated. `ScreenManager.renderActiveScreen()` accepts and forwards `deltaTime`.
+- Added `lastFrameTime` (long, nanoTime) and `lastDeltaTime` (float) fields to
+  `GameLoop`. Delta time computed at the top of each loop iteration as
+  `(now - lastFrameTime) / 1_000_000_000f`, clamped to 100ms. Stored in
+  `lastDeltaTime` for the window refresh callback (fires during OS drag, outside
+  the loop). Fixes caret blink drift — all `caretBlinkTimer += 0.016f` replaced
+  with `+= deltaTime`.
+- Created `Action.java` in `game/` — enum of all bindable actions: `MOVE_FORWARD`,
+  `MOVE_BACKWARD`, `MOVE_LEFT`, `MOVE_RIGHT`, `JUMP`, `BREAK_BLOCK`, `PLACE_BLOCK`,
+  `TOGGLE_FREECAM`, `OPEN_CHAT` (stub). Each entry has a `displayName` for the UI.
+- Created `KeyBindings.java` in `game/` — `EnumMap<Action, Integer>` mapping each
+  action to a GLFW key or encoded mouse button code. Mouse buttons offset by
+  `MOUSE_BUTTON_OFFSET = 1000` to avoid collision with key codes. `UNBOUND = -1`
+  sentinel — unbound actions never fire. Default bindings match previous hardcoded
+  constants. `saveTo(Properties)` / `loadFrom(Properties)` for persistence.
+  `displayName(int)` returns human-readable key name for the settings UI.
+- Created `GameSettings.java` in `game/` — persistent settings backed by
+  `settings.properties`. Owned by `GameLoop`, passed via constructor injection.
+  Fields: username, renderDistance (2–32), fov (50–110), mouseSensitivity,
+  theme, vsync, windowMode. `load()` reads from file with clamped fallbacks.
+  `save()` writes atomically via `.tmp` rename. `WindowMode` enum: WINDOWED,
+  FULLSCREEN, BORDERLESS. `KeyBindings` serialized into the same file.
+- Refactored `InputHandler` — replaced hardcoded left/right mouse button fields
+  with `boolean[8]` arrays covering all GLFW mouse buttons. Added
+  `wasMouseButtonJustPressed(int)` and `isMouseButtonDown(int)`. Kept
+  `wasMouseLeftClicked()` / `wasMouseRightClicked()` as deprecated delegates.
+- Refactored `Camera` — `FOV` changed from `private static final float` to a
+  mutable instance field. Added `setFov(int degrees)`. `getProjectionMatrix()`
+  uses the instance field.
+- Refactored `GameLoop` constructor — replaced `String username` parameter with
+  `GameSettings settings`. `Window` still constructed internally. Added
+  `isSessionActive()` helper (returns `serverChannel != null`). Added
+  `applyWindowMode(WindowMode)` private helper for FULLSCREEN / BORDERLESS /
+  WINDOWED switching via `glfwSetWindowMonitor` and `glfwSetWindowAttrib`.
+- `GameLoop.init()` now calls `glfwSwapInterval` from settings (fixes locked FPS),
+  `applyWindowMode` from settings, and `camera.setFov` from settings.
+- All hardcoded GLFW key/mouse constants in `GameLoop.update()` replaced with
+  `isActionDown(Action)` / `wasActionJustPressed(Action)` helpers that read from
+  `settings.getKeyBindings()`. Mouse sensitivity reads from `settings.getMouseSensitivity()`.
+- `Main.java` — removed `--username` CLI arg parsing. Constructs `GameSettings`,
+  calls `settings.load()`, passes to `GameLoop`.
+
+### Decisions Made
+- `GameSettings` owned by `GameLoop`, not static. Phase 7 mod settings will use
+  separate instances pointing to different property files — same class, zero refactor.
+- `UNBOUND` actions return false from both `isActionDown` and `wasActionJustPressed`
+  — no special-case needed anywhere in the input path.
+- VSync default is `true` in `GameSettings`. `Window.init()` still calls
+  `glfwSwapInterval(1)` as before — `GameLoop.init()` immediately overrides it
+  from settings after `window.init()` returns. Net effect: same behavior until
+  the user changes the setting.
+
+### Problems Encountered
+- `GameLoop` constructor rewrite dropped the `this.window = new Window(...)` line,
+  causing "blank final field window may not have been initialized" compile error.
+  Fixed by restoring the Window construction in the new constructor body.
+- Physics mode camera froze after freecam refactor — `camera.getPosition().set(
+  player.getEyePosition())` was accidentally omitted from the physics `else` branch
+  when rewriting the movement section. Physics still ran (player moved) but camera
+  never followed. Fixed by restoring the line.
+
+### AI Assistance Notes
+- Claude wrote all changes across all six files.
+
+### Remaining for 6B-7
+- Step 5: Live render distance — `World.RENDER_DISTANCE_H` driven by `GameSettings`,
+  on-demand unload sweep when distance decreases.
+- Step 6: `SettingsScreen.java` — full tabbed UI (Gameplay, Graphics, Display,
+  Controls, Keybinds, Sound stub).
+- Step 7: Wire `SettingsScreen` into `MainMenuScreen` and `PauseMenuScreen`.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

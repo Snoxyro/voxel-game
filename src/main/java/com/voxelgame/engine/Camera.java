@@ -13,8 +13,8 @@ import org.joml.Vector3f;
  */
 public class Camera {
 
-    /** Vertical field of view in radians — 70° is a natural, non-fisheye FOV. */
-    private static final float FOV        = (float) Math.toRadians(70.0);
+    /** Vertical field of view in radians. Defaults to 70°. Mutable via {@link #setFov(int)}. */
+    private float fov = (float) Math.toRadians(70.0);
     private static final float NEAR_PLANE = 0.1f;
     private static final float FAR_PLANE  = 1000.0f;
 
@@ -86,7 +86,7 @@ public class Camera {
      * @return the projection matrix
      */
     public Matrix4f getProjectionMatrix() {
-        return new Matrix4f().perspective(FOV, aspectRatio, NEAR_PLANE, FAR_PLANE);
+        return new Matrix4f().perspective(fov, aspectRatio, NEAR_PLANE, FAR_PLANE);
     }
 
     /** @return the camera's current world-space position */
@@ -108,5 +108,15 @@ public class Camera {
      */
     public void setPitch(float pitch) {
         this.pitch = Math.max(-89.0f, Math.min(89.0f, pitch));
+    }
+
+    /**
+     * Updates the vertical field of view.
+     * Takes effect on the next call to {@link #getProjectionMatrix()}.
+     *
+     * @param fovDegrees FOV in degrees, typically 50–110
+     */
+    public void setFov(int fovDegrees) {
+        this.fov = (float) Math.toRadians(fovDegrees);
     }
 }

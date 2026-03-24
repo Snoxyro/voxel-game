@@ -57,22 +57,22 @@ public class PauseMenuScreen implements Screen {
     public void onHide() { /* nothing to tear down */ }
 
     @Override
-    public void render(UiTheme theme, int sw, int sh) {
+    public void render(UiTheme theme, float deltaTime, int screenWidth, int screenHeight) {
         double[] cx = {0}, cy = {0};
         GLFW.glfwGetCursorPos(GLFW.glfwGetCurrentContext(), cx, cy);
         mouseX = (int) cx[0];
         mouseY = (int) cy[0];
 
-        int panelX = (sw - PANEL_W) / 2;
-        int panelY = (sh - PANEL_H) / 2;
+        int panelX = (screenWidth - PANEL_W) / 2;
+        int panelY = (screenHeight - PANEL_H) / 2;
 
-        theme.drawOverlayDim(sw, sh);
+        theme.drawOverlayDim(screenWidth, screenHeight);
         theme.drawPanel(panelX, panelY, PANEL_W, PANEL_H);
 
         String title = "PAUSED";
         theme.drawTitle(panelX + PANEL_W / 2.0f, panelY + 14, title);
 
-        int btnX  = (sw - BUTTON_W) / 2;
+        int btnX  = (screenWidth - BUTTON_W) / 2;
         int btn1Y = panelY + 60;
         int btn2Y = btn1Y + BUTTON_H + BUTTON_GAP;
         int btn3Y = btn2Y + BUTTON_H + BUTTON_GAP;
