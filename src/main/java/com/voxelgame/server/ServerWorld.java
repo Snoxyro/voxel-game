@@ -11,6 +11,7 @@ import com.voxelgame.game.ChunkStorage;
 import com.voxelgame.game.World;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -31,10 +32,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * {@link #tick()} drains at the start of each tick. This is the same handoff
  * pattern used by {@link World}'s worker thread architecture.
  *
- * <h3>Phase 5D upgrade path</h3>
- * Currently {@code world.update()} uses the first connected player's position as
- * the streaming center. Phase 5D adds player movement sync — at that point this
- * should expand to compute the union of all player view areas.
+ * <h3>Streaming model</h3>
+ * {@link World#update(List)} receives all connected player viewpoints each tick,
+ * so chunk scheduling and unloading is computed as the union of player view areas.
  */
 public class ServerWorld {
 
@@ -47,7 +47,7 @@ public class ServerWorld {
     private final World world;
 
     /** Carries a position update from the Netty thread to the tick thread. */
-    private record PendingMove(int playerId, float x, float y, float z) {}
+    private record PendingMove(int playerId, float x, float y, float z, float yaw, float pitch) {}
 
     /**
      * Queues for cross-thread player lifecycle events.
@@ -75,8 +75,8 @@ public class ServerWorld {
      *
      * <ol>
      *   <li>Drains pending player connects and disconnects.</li>
-     *   <li>Updates chunk streaming in the underlying {@link World} using the primary
-     *       player's position as the streaming center.</li>
+     *   <li>Updates chunk streaming in the underlying {@link World} using all
+     *       connected player viewpoints.</li>
      *   <li>Sends newly loaded chunks to each player and unloads chunks that left the
      *       server's loaded set.</li>
      * </ol>
@@ -88,28 +88,17 @@ public class ServerWorld {
             int id = move.playerId();
             for (PlayerSession p : players) {
                 if (p.getPlayerId() == id) {
-                    p.updatePosition(move.x(), move.y(), move.z());
+                    p.updatePosition(move.x(), move.y(), move.z(), move.yaw(), move.pitch());
                     break;
                 }
             }
         }
 
         // --- Drain pending player connects ---
-        // For each new player: announce all existing players to them,
-        // then announce them to all existing players. Add them last so
-        // they don't receive their own announcement.
+        // Just add the player — the visibility loop below sends spawn packets on the
+        // first tick where two players are within range of each other.
         PlayerSession add;
         while ((add = pendingAdds.poll()) != null) {
-            for (PlayerSession existing : players) {
-                // Tell the new player about each existing player
-                add.sendPacket(new com.voxelgame.common.network.packets.PlayerSpawnPacket(
-                    existing.getPlayerId(), existing.getUsername(),
-                    existing.getX(), existing.getY(), existing.getZ()));
-                // Tell each existing player about the new player
-                existing.sendPacket(new com.voxelgame.common.network.packets.PlayerSpawnPacket(
-                    add.getPlayerId(), add.getUsername(),
-                    add.getX(), add.getY(), add.getZ()));
-            }
             players.add(add);
         }
 
@@ -122,18 +111,24 @@ public class ServerWorld {
             com.voxelgame.common.network.packets.PlayerDespawnPacket despawn =
                 new com.voxelgame.common.network.packets.PlayerDespawnPacket(id);
             for (PlayerSession p : players) {
-                p.sendPacket(despawn);
+                if (p.isPlayerVisible(id)) {
+                    p.sendPacket(despawn);
+                    p.removeVisiblePlayer(id);
+                }
             }
         }
 
         if (players.isEmpty()) return;
 
         // --- Advance chunk streaming ---
-        PlayerSession primary = players.get(0);
-        world.update(
-            primary.getX(), primary.getY(), primary.getZ(),
-            0, 0, 0
-        );
+        // Build a viewer list from every connected player so World loads the union
+        // of all players' render areas, not just the first player's.
+        List<World.ViewerInfo> viewers = new ArrayList<>();
+        for (PlayerSession p : players) {
+            float[] dir = yawPitchToDir(p.getYaw(), p.getPitch());
+            viewers.add(new World.ViewerInfo(p.getX(), p.getY(), p.getZ(), dir[0], dir[1], dir[2]));
+        }
+        world.update(viewers);
 
         // --- Stream chunks to / from each player ---
         Set<ChunkPos> loaded = world.getLoadedChunkPositions();
@@ -142,16 +137,38 @@ public class ServerWorld {
         }
 
         // --- Broadcast positions to all other players ---
-        // Runs every tick (20 TPS) — clients interpolate between updates.
-        // Only meaningful with 2+ players; the single-player case exits early above.
+        // Visibility management — runs every tick for every player pair.
+        // Handles dynamic spawn/despawn as players move into and out of each other's
+        // render distance, and sends position updates only to players who have the
+        // mover currently visible.
         if (players.size() > 1) {
-            for (PlayerSession mover : players) {
-                com.voxelgame.common.network.packets.PlayerMoveCBPacket movePacket =
-                    new com.voxelgame.common.network.packets.PlayerMoveCBPacket(
-                        mover.getPlayerId(), mover.getX(), mover.getY(), mover.getZ());
+            float renderDistBlocks = World.RENDER_DISTANCE_H * com.voxelgame.common.world.Chunk.SIZE;
+            float renderDistSq = renderDistBlocks * renderDistBlocks;
+
+            for (PlayerSession observer : players) {
                 for (PlayerSession other : players) {
-                    if (other.getPlayerId() != mover.getPlayerId()) {
-                        other.sendPacket(movePacket);
+                    if (observer.getPlayerId() == other.getPlayerId()) continue;
+
+                    float dx = other.getX() - observer.getX();
+                    float dz = other.getZ() - observer.getZ();
+                    boolean inRange = dx * dx + dz * dz <= renderDistSq;
+                    boolean currentlyVisible = observer.isPlayerVisible(other.getPlayerId());
+
+                    if (inRange && !currentlyVisible) {
+                        // Other player entered range — announce them and start sending moves
+                        observer.sendPacket(new com.voxelgame.common.network.packets.PlayerSpawnPacket(
+                            other.getPlayerId(), other.getUsername(),
+                            other.getX(), other.getY(), other.getZ()));
+                        observer.addVisiblePlayer(other.getPlayerId());
+                    } else if (!inRange && currentlyVisible) {
+                        // Other player left range — remove their model
+                        observer.sendPacket(new com.voxelgame.common.network.packets.PlayerDespawnPacket(
+                            other.getPlayerId()));
+                        observer.removeVisiblePlayer(other.getPlayerId());
+                    } else if (inRange) {
+                        // In range and already visible — send position update
+                        observer.sendPacket(new com.voxelgame.common.network.packets.PlayerMoveCBPacket(
+                            other.getPlayerId(), other.getX(), other.getY(), other.getZ()));
                     }
                 }
             }
@@ -167,33 +184,100 @@ public class ServerWorld {
      * are picked up in subsequent ticks as the set is iterated again.
      *
      * @param player the player to update
-     * @param loaded the current set of chunks loaded by the server
+     * @param loaded the set of currently loaded chunk positions in the world
      */
     private void streamChunksToPlayer(PlayerSession player, Set<ChunkPos> loaded) {
-        // Send chunks that are loaded server-side but not yet sent to this player
-        int sent = 0;
+        // Compute the player's current chunk-space position for distance sorting.
+        // Spawn chunks must arrive before gravity can drop the player — sorting
+        // nearest-first guarantees terrain exists underfoot before distant chunks stream in.
+        int pcx = Math.floorDiv((int) player.getX(), Chunk.SIZE);
+        int pcy = Math.floorDiv((int) player.getY(), Chunk.SIZE);
+        int pcz = Math.floorDiv((int) player.getZ(), Chunk.SIZE);
+
+        // Collect chunks the server has loaded but has not yet sent to this player,
+        // then sort from nearest to farthest chunk position.
+        List<ChunkPos> toSend = new ArrayList<>();
         for (ChunkPos pos : loaded) {
+            if (!player.hasChunk(pos)) toSend.add(pos);
+        }
+        // Apply the same 75/25 bias used by World.tickGenerationQueue:
+        // chunks in the player's look direction jump the queue, but all chunks
+        // eventually stream regardless of look direction.
+        float[] dir = yawPitchToDir(player.getYaw(), player.getPitch());
+        final float dirX = dir[0], dirY = dir[1], dirZ = dir[2];
+        toSend.sort(Comparator.comparingDouble(pos -> {
+            int dx = pos.x() - pcx, dy = pos.y() - pcy, dz = pos.z() - pcz;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            float dot = 0f;
+            float len = (float) Math.sqrt(distSq);
+            if (len > 0.001f) {
+                dot = (dx / len) * dirX + (dy / len) * dirY + (dz / len) * dirZ;
+            }
+            return distSq * (1.0 - dot * 0.5);
+        }));
+
+        int sent = 0;
+        for (ChunkPos pos : toSend) {
             if (sent >= MAX_CHUNKS_PER_PLAYER_PER_TICK) break;
-            if (player.hasChunk(pos)) continue;
 
             Chunk chunk = world.getChunk(pos);
-            if (chunk == null) continue; // should not happen, but guard anyway
+            if (chunk == null) continue; // guard: should not happen
 
             player.sendPacket(new ChunkDataPacket(pos.x(), pos.y(), pos.z(), chunk.toBytes()));
             player.markChunkLoaded(pos);
             sent++;
         }
 
-        // Unload chunks the player has that the server has unloaded
-        // Collect first to avoid ConcurrentModificationException on the set
+        // Unload chunks the player has that the server has unloaded.
+        // Collected into a separate list first to avoid ConcurrentModificationException.
         List<ChunkPos> toUnload = new ArrayList<>();
+        // Unload if the server dropped the chunk OR if it left this player's personal range.
+        // The second condition handles the case where the server keeps a chunk loaded for
+        // another player — without it, players see chunks from the other side of the world.
         for (ChunkPos pos : player.getLoadedChunks()) {
-            if (!loaded.contains(pos)) toUnload.add(pos);
+            if (!loaded.contains(pos) || !isInPlayerRange(pos, player)) toUnload.add(pos);
         }
         for (ChunkPos pos : toUnload) {
             player.sendPacket(new UnloadChunkPacket(pos.x(), pos.y(), pos.z()));
             player.markChunkUnloaded(pos);
         }
+    }
+
+    /**
+     * Converts yaw and pitch angles (degrees) to a normalised world-space direction
+     * vector matching the same convention used by {@link com.voxelgame.engine.GameLoop}.
+     *
+     * @param yaw   look yaw in degrees
+     * @param pitch look pitch in degrees
+     * @return float[3] normalised direction {x, y, z}
+     */
+    private static float[] yawPitchToDir(float yaw, float pitch) {
+        float yawRad   = (float) Math.toRadians(yaw);
+        float pitchRad = (float) Math.toRadians(pitch);
+        float cosPitch = (float) Math.cos(pitchRad);
+        return new float[] {
+            (float) Math.cos(yawRad) * cosPitch,
+            (float) Math.sin(pitchRad),
+            (float) Math.sin(yawRad) * cosPitch
+        };
+    }
+
+    /**
+     * Returns true if the given chunk is within this player's personal render distance.
+     * Used to unload chunks from a player's client even when the server keeps them
+     * loaded for another player.
+     *
+     * @param pos    chunk to test
+     * @param player the player whose view area is checked
+     * @return true if the chunk is within range
+     */
+    private static boolean isInPlayerRange(ChunkPos pos, PlayerSession player) {
+        int pcx = Math.floorDiv((int) player.getX(), Chunk.SIZE);
+        int pcy = Math.floorDiv((int) player.getY(), Chunk.SIZE);
+        int pcz = Math.floorDiv((int) player.getZ(), Chunk.SIZE);
+        int dx = pos.x() - pcx, dy = pos.y() - pcy, dz = pos.z() - pcz;
+        return dx * dx + dz * dz <= World.RENDER_DISTANCE_H * World.RENDER_DISTANCE_H
+            && Math.abs(dy) <= World.RENDER_DISTANCE_V;
     }
 
     /**
@@ -222,6 +306,7 @@ public class ServerWorld {
      */
     public void applyBlockPlace(int worldX, int worldY, int worldZ, BlockType blockType) {
         if (blockType == Blocks.AIR) return; // reject AIR place
+        if (isBlockInsideAnyPlayer(worldX, worldY, worldZ)) return; // reject placement inside a player hitbox
         world.setBlock(worldX, worldY, worldZ, blockType);
         broadcastBlockChange(worldX, worldY, worldZ, blockType);
     }
@@ -247,15 +332,57 @@ public class ServerWorld {
     }
 
     /**
-     * Enqueues a position update from a client. Safe to call from the Netty I/O thread.
+     * Returns true if the unit cube at (worldX, worldY, worldZ) overlaps the AABB
+     * of any currently connected player.
+     *
+     * <p>Player AABB mirrors {@link com.voxelgame.common.world.PhysicsBody}:
+     * width=0.6, height=1.8, depth=0.6, with origin at feet position (px, py, pz).
+     * <ul>
+     *   <li>Min: (px - 0.3, py,       pz - 0.3)</li>
+     *   <li>Max: (px + 0.3, py + 1.8, pz + 0.3)</li>
+     * </ul>
+     *
+     * <p><b>Threading note:</b> Called from the Netty I/O thread, reads the {@code players}
+     * list — the same race that exists in {@link #broadcastBlockChange}. Player position
+     * fields are {@code volatile} so individual reads are safe. Acceptable until block
+     * actions are queued through the tick thread.
+     *
+     * @param worldX world-space X of the block to place
+     * @param worldY world-space Y
+     * @param worldZ world-space Z
+     * @return true if the block volume intersects any player hitbox
+     */
+    private boolean isBlockInsideAnyPlayer(int worldX, int worldY, int worldZ) {
+        // Block occupies the unit cube: min=(worldX, worldY, worldZ), max=(worldX+1, worldY+1, worldZ+1)
+        for (PlayerSession player : players) {
+            float px = player.getX();
+            float py = player.getY();
+            float pz = player.getZ();
+
+            // Two AABBs overlap only when all three axes overlap simultaneously.
+            // Condition: blockMax > playerMin AND blockMin < playerMax on every axis.
+            boolean overlapX = (worldX + 1) > (px - 0.3f) && worldX < (px + 0.3f);
+            boolean overlapY = (worldY + 1) > py           && worldY < (py + 1.8f);
+            boolean overlapZ = (worldZ + 1) > (pz - 0.3f) && worldZ < (pz + 0.3f);
+
+            if (overlapX && overlapY && overlapZ) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Enqueues a position and look direction update from a client. Safe to call
+     * from the Netty I/O thread.
      *
      * @param playerId the player whose position changed
      * @param x        new world-space X
      * @param y        new world-space Y (feet)
      * @param z        new world-space Z
+     * @param yaw      look yaw in degrees
+     * @param pitch    look pitch in degree
      */
-    public void queuePlayerMove(int playerId, float x, float y, float z) {
-        pendingMoves.offer(new PendingMove(playerId, x, y, z));
+    public void queuePlayerMove(int playerId, float x, float y, float z, float yaw, float pitch) {
+        pendingMoves.offer(new PendingMove(playerId, x, y, z, yaw, pitch));
     }
 
     // -------------------------------------------------------------------------

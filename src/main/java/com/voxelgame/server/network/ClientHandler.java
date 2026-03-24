@@ -116,7 +116,7 @@ public class ClientHandler extends SimpleChannelInboundHandler<Packet> {
         } else if (msg instanceof PlayerMoveSBPacket p) {
             // Queue the position update for the tick thread via ServerWorld.
             // Direct field write avoided — goes through the same queue pattern as connects/disconnects.
-            server.getServerWorld().queuePlayerMove(playerId, p.x(), p.y(), p.z());
+            server.getServerWorld().queuePlayerMove(playerId, p.x(), p.y(), p.z(), p.yaw(), p.pitch());
         } else {
             System.out.println("[Server] Unhandled play-state packet from " + username
                 + ": " + msg.getClass().getSimpleName());

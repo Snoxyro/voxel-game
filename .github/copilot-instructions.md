@@ -27,8 +27,8 @@ com.voxelgame.
 ├── server/                    ← headless server — ZERO engine/GL imports
 │   ├── ServerMain.java
 │   ├── GameServer.java        ← 20 TPS game loop; constructors: (Path,int) and (Path,int,long)
-│   ├── PlayerSession.java
-│   ├── ServerWorld.java
+│   ├── PlayerSession.java     ← per-client: channel, x/y/z, yaw/pitch, loadedChunks, visiblePlayerIds
+│   ├── ServerWorld.java       ← multi-viewer World.update(); per-player chunk streaming and visibility
 │   ├── network/               ← ServerNetworkManager, ClientHandler
 │   └── storage/               ← FlatFileChunkStorage, WorldMeta, ChunkStorage interface
 ├── client/
@@ -53,7 +53,7 @@ com.voxelgame.
     │   ├── WorldSelectScreen.java        ← statusMessage field + setStatusMessage() for launch errors
     │   ├── PauseMenuScreen.java          ← isOverlay() = true
     │   └── MultiplayerConnectScreen.java ← ConnectHandler FI; cancelledFlag abort; connecting lock
-    └── World, TerrainGenerator, ChunkMesher, Player, ChunkStorage
+    └── World (ViewerInfo record; update(List<ViewerInfo>)), TerrainGenerator, ChunkMesher, Player, ChunkStorage
 ```
 
 ## Architecture Principles
@@ -70,10 +70,29 @@ thread only. Worker threads run `ChunkMesher.mesh()` (pure CPU). The main thread
 picks up results and calls `new Mesh(vertices)`. This rule applies to `ClientWorld`
 as well — mesh uploads must only happen on the main thread.
 
+### GL Resource Construction Timing
+Any class instantiated before `GameLoop.init()` must not create GL resources in its
+constructor or field initializers. The pattern is: nullable field + separate
+`initRenderResources()` method called from `GameLoop.init()` after `window.init()`.
+This has caused two crashes in the project history — it is a hard rule.
+
 ### BlockView Interface
 `PhysicsBody`, `RayCaster`, and `Player` accept `BlockView` (not `World` or
 `ClientWorld`). Both `World` and `ClientWorld` implement `BlockView`. Never change
 these to accept a concrete type — that would break the client/server separation.
+
+### Multi-Viewer Chunk Streaming
+`World.update()` accepts `List<World.ViewerInfo>`. Chunks load if in range of ANY
+viewer; unload only when out of range of ALL viewers. `ServerWorld` builds this list
+from all connected players every tick. Each player's client only receives chunks
+within their own personal render distance — the server loaded set is the union, but
+per-player streaming is range-gated.
+
+### Per-Player Visibility (Player Models)
+`PlayerSession.visiblePlayerIds` tracks which remote players each session knows about.
+`ServerWorld` sends `PlayerSpawnPacket` when two players enter range and
+`PlayerDespawnPacket` when they leave. Position updates are only sent while visibility
+is active. The client never filters — it renders exactly what the server has told it.
 
 ### Network Protocol
 Wire format: `[4-byte length][1-byte packet ID][payload]`. When adding a new packet:
@@ -121,19 +140,20 @@ for the world-launch background thread to post GL-thread work.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 6 — Foundation for extensibility. Sub-phase 6B nearly complete.
+Phase 6 — Foundation for extensibility. Sub-phase 6B almost complete.
 
 ### Phase 6 status
 - 6A done: Block Registry
 - 6B-theme done: UiTheme abstract class, DarkTheme, LightTheme; Screen.render() takes UiTheme
 - 6B-1 through 6B-6 done: full UI screen system
-- 6B-5 done: MultiplayerConnectScreen — real server connect, cancelledFlag abort, friendly errors
+- Multiplayer bugs fixed: chunk load order (nearest-first), block-in-hitbox rejection,
+  per-player independent chunk streaming (World multi-viewer), per-player player visibility
+  (dynamic spawn/despawn by render distance)
 - 6B-7 next: Settings stub
-- TODO first in next session: fix chunk loading wave pattern (see DEVLOG Entry 042)
 
 ### After 6B
 - 6C: Lighting + Day/Night Cycle
-- 6D: Entity System + Player Model
+- 6D: Entity System + Player Model (nametags deferred to here)
 - 6E: Items + Inventory
 - Phase 7: Modding API
 
@@ -156,6 +176,8 @@ Phase 6 — Foundation for extensibility. Sub-phase 6B nearly complete.
   values are always wrong for proportional or atlas-based fonts.
 - Screen.render() takes UiTheme, not UiRenderer — never add UiRenderer as a screen parameter
 - All colors in themes are packed 0xRRGGBBAA ints — never use float r,g,b,a in screen code
+- World.RENDER_DISTANCE_H and RENDER_DISTANCE_V are public static final — used by
+  ServerWorld for the visibility range check. Never make them package-private.
 
 ## What NOT to Do
 - Do not suggest switching to Maven
@@ -168,3 +190,5 @@ Phase 6 — Foundation for extensibility. Sub-phase 6B nearly complete.
 - Do not hardcode character widths for UI centering — use `r.measureText()`
 - Do not intercept Escape key in screen `onKeyPress()` for overlay screens —
   `GameLoop.handleEscapeKey()` owns that behavior
+- Do not revert World.update() to a single-viewer signature — it accepts
+  List<World.ViewerInfo> and that is a locked architecture decision

@@ -29,17 +29,16 @@ import java.util.concurrent.*;
  * and manages the generation queue. No GL calls anywhere in this class.
  *
  * <h3>Multiplayer note</h3>
- * {@link #update(float, float, float, float, float, float)} currently streams around
- * a single viewer position. Phase 5D will expand this to accept a collection of
- * player positions and compute the union of all view areas.
+ * {@link #update(List)} streams around all provided viewer positions and computes
+ * the union of all view areas.
  */
 public class World implements BlockView {
 
     /** Horizontal circular chunk load radius in chunk units. */
-    private static final int RENDER_DISTANCE_H = 16;
+    public static final int RENDER_DISTANCE_H = 16;
 
     /** Vertical chunk load radius in chunk units (above and below viewer). */
-    private static final int RENDER_DISTANCE_V = 8;
+    public static final int RENDER_DISTANCE_V = 8;
 
     /** Maximum chunk uploads (data stores) per frame from the pending queue. */
     private static final int MAX_UPLOADS_PER_FRAME = 256;
@@ -65,11 +64,9 @@ public class World implements BlockView {
     private final ConcurrentLinkedQueue<PendingChunk> pendingChunks = new ConcurrentLinkedQueue<>();
 
     // -------------------------------------------------------------------------
-    // Schedule guard — skip the 14k-position scan when center chunk is unchanged
+    // Schedule guard — skip the scan when the set of viewer center chunks is unchanged
     // -------------------------------------------------------------------------
-    private int lastScheduledCX = Integer.MIN_VALUE;
-    private int lastScheduledCY = Integer.MIN_VALUE;
-    private int lastScheduledCZ = Integer.MIN_VALUE;
+    private final Set<ChunkPos> lastViewerChunks = new HashSet<>();
 
     // -------------------------------------------------------------------------
     // Persistence — dirty tracking and background save queue
@@ -111,6 +108,9 @@ public class World implements BlockView {
     /** Carries a freshly generated chunk from the worker thread to the tick thread. */
     private record PendingChunk(ChunkPos pos, Chunk chunk) {}
 
+    /** Per-viewer streaming anchor and look direction used for generation prioritisation. */
+    public record ViewerInfo(float x, float y, float z, float dirX, float dirY, float dirZ) {}
+
     /**
      * Creates a World with the given world seed.
      *
@@ -126,33 +126,29 @@ public class World implements BlockView {
     // -------------------------------------------------------------------------
 
     /**
-     * Drives chunk streaming for a single viewer position. Call once per tick.
+     * Drives chunk streaming for all active viewers. Call once per tick.
      *
-     * @param px   viewer X in world space
-     * @param py   viewer Y in world space
-     * @param pz   viewer Z in world space
-     * @param dirX normalised look direction X (used for direction-biased generation)
-     * @param dirY normalised look direction Y
-     * @param dirZ normalised look direction Z
+     * @param viewers active viewer positions and look directions
      */
-    public void update(float px, float py, float pz, float dirX, float dirY, float dirZ) {
-        int centerCX = Math.floorDiv((int) px, Chunk.SIZE);
-        int centerCY = Math.floorDiv((int) py, Chunk.SIZE);
-        int centerCZ = Math.floorDiv((int) pz, Chunk.SIZE);
+    public void update(List<ViewerInfo> viewers) {
+        drainPendingChunks(viewers);
 
-        drainPendingChunks(centerCX, centerCY, centerCZ);
-
-        if (centerCX != lastScheduledCX
-                || centerCY != lastScheduledCY
-                || centerCZ != lastScheduledCZ) {
-            scheduleNeededChunks(centerCX, centerCY, centerCZ);
-            lastScheduledCX = centerCX;
-            lastScheduledCY = centerCY;
-            lastScheduledCZ = centerCZ;
+        Set<ChunkPos> viewerChunks = new HashSet<>();
+        for (ViewerInfo viewer : viewers) {
+            int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
+            int centerCY = Math.floorDiv((int) viewer.y(), Chunk.SIZE);
+            int centerCZ = Math.floorDiv((int) viewer.z(), Chunk.SIZE);
+            viewerChunks.add(new ChunkPos(centerCX, centerCY, centerCZ));
         }
 
-        tickGenerationQueue(centerCX, centerCY, centerCZ, dirX, dirY, dirZ);
-        unloadDistantChunks(centerCX, centerCY, centerCZ);
+        if (!viewerChunks.equals(lastViewerChunks)) {
+            scheduleNeededChunks(viewers);
+            lastViewerChunks.clear();
+            lastViewerChunks.addAll(viewerChunks);
+        }
+
+        tickGenerationQueue(viewers);
+        unloadDistantChunks(viewers);
         saveDirtyChunks(); // flush block changes to disk at end of each tick
     }
 
@@ -260,12 +256,12 @@ public class World implements BlockView {
      * Drains completed generation results into the chunk map.
      * Discards results for chunks that have moved out of range while the worker was running.
      */
-    private void drainPendingChunks(int centerCX, int centerCY, int centerCZ) {
+    private void drainPendingChunks(List<ViewerInfo> viewers) {
         PendingChunk pending;
         int stored = 0;
         while (stored < MAX_UPLOADS_PER_FRAME && (pending = pendingChunks.poll()) != null) {
             inProgress.remove(pending.pos());
-            if (!isInRange(pending.pos(), centerCX, centerCY, centerCZ)) continue;
+            if (!isInRangeOfAny(pending.pos(), viewers)) continue;
             chunks.put(pending.pos(), pending.chunk());
             stored++;
         }
@@ -273,21 +269,25 @@ public class World implements BlockView {
 
     /**
      * Adds all in-range, not-yet-queued chunk positions to {@link #generationQueue}.
-     * Only called when the center chunk changes — skipped otherwise to avoid
-     * scanning ~14,000 positions per tick while standing still.
+     * Only called when the set of viewer center chunks changes.
      */
-    private void scheduleNeededChunks(int centerCX, int centerCY, int centerCZ) {
-        for (int cx = centerCX - RENDER_DISTANCE_H; cx <= centerCX + RENDER_DISTANCE_H; cx++) {
-            for (int cz = centerCZ - RENDER_DISTANCE_H; cz <= centerCZ + RENDER_DISTANCE_H; cz++) {
-                int dx = cx - centerCX, dz = cz - centerCZ;
-                if (dx * dx + dz * dz > RENDER_DISTANCE_H * RENDER_DISTANCE_H) continue;
-                for (int cy = centerCY - RENDER_DISTANCE_V; cy <= centerCY + RENDER_DISTANCE_V; cy++) {
-                    if (cy < 0) continue;
-                    ChunkPos pos = new ChunkPos(cx, cy, cz);
-                    if (!chunks.containsKey(pos)
-                            && !inProgress.contains(pos)
-                            && !generationQueue.contains(pos)) {
-                        generationQueue.add(pos);
+    private void scheduleNeededChunks(List<ViewerInfo> viewers) {
+        for (ViewerInfo viewer : viewers) {
+            int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
+            int centerCY = Math.floorDiv((int) viewer.y(), Chunk.SIZE);
+            int centerCZ = Math.floorDiv((int) viewer.z(), Chunk.SIZE);
+            for (int cx = centerCX - RENDER_DISTANCE_H; cx <= centerCX + RENDER_DISTANCE_H; cx++) {
+                for (int cz = centerCZ - RENDER_DISTANCE_H; cz <= centerCZ + RENDER_DISTANCE_H; cz++) {
+                    int dx = cx - centerCX, dz = cz - centerCZ;
+                    if (dx * dx + dz * dz > RENDER_DISTANCE_H * RENDER_DISTANCE_H) continue;
+                    for (int cy = centerCY - RENDER_DISTANCE_V; cy <= centerCY + RENDER_DISTANCE_V; cy++) {
+                        if (cy < 0) continue;
+                        ChunkPos pos = new ChunkPos(cx, cy, cz);
+                        if (!chunks.containsKey(pos)
+                                && !inProgress.contains(pos)
+                                && !generationQueue.contains(pos)) {
+                            generationQueue.add(pos);
+                        }
                     }
                 }
             }
@@ -298,10 +298,10 @@ public class World implements BlockView {
      * Unloads all chunks outside the render distance.
      * Evicts their heightmap cache entries when the full column is gone.
      */
-    private void unloadDistantChunks(int centerCX, int centerCY, int centerCZ) {
+    private void unloadDistantChunks(List<ViewerInfo> viewers) {
         List<ChunkPos> toUnload = new ArrayList<>();
         for (ChunkPos pos : chunks.keySet()) {
-            if (!isInRange(pos, centerCX, centerCY, centerCZ)) toUnload.add(pos);
+            if (!isInRangeOfAny(pos, viewers)) toUnload.add(pos);
         }
         for (ChunkPos pos : toUnload) {
             chunks.remove(pos);
@@ -360,6 +360,16 @@ public class World implements BlockView {
             && Math.abs(dy) <= RENDER_DISTANCE_V;
     }
 
+    private boolean isInRangeOfAny(ChunkPos pos, List<ViewerInfo> viewers) {
+        for (ViewerInfo v : viewers) {
+            int cx = Math.floorDiv((int) v.x(), Chunk.SIZE);
+            int cy = Math.floorDiv((int) v.y(), Chunk.SIZE);
+            int cz = Math.floorDiv((int) v.z(), Chunk.SIZE);
+            if (isInRange(pos, cx, cy, cz)) return true;
+        }
+        return false;
+    }
+
     private void evictHeightmapIfColumnUnloaded(ChunkPos pos) {
         boolean columnStillLoaded = chunks.keySet().stream()
             .anyMatch(p -> p.x() == pos.x() && p.z() == pos.z());
@@ -373,9 +383,9 @@ public class World implements BlockView {
      * to the executor each tick. Budget split: 75% direction-biased, 25% pure distance.
      * Keeps the executor queue shallow so priority changes take effect within one tick.
      */
-    private void tickGenerationQueue(int centerCX, int centerCY, int centerCZ,
-                                     float dirX, float dirY, float dirZ) {
+    private void tickGenerationQueue(List<ViewerInfo> viewers) {
         if (generationQueue.isEmpty()) return;
+        if (viewers.isEmpty()) return;
 
         generationQueue.removeIf(pos ->
             chunks.containsKey(pos) || inProgress.contains(pos));
@@ -387,12 +397,18 @@ public class World implements BlockView {
 
         // --- Biased pass: sort by direction-weighted distance ---
         generationQueue.sort(Comparator.comparingDouble(p -> {
+            ViewerInfo nearest = findNearestViewer(p, viewers);
+            int centerCX = Math.floorDiv((int) nearest.x(), Chunk.SIZE);
+            int centerCY = Math.floorDiv((int) nearest.y(), Chunk.SIZE);
+            int centerCZ = Math.floorDiv((int) nearest.z(), Chunk.SIZE);
             float dx = p.x() - centerCX, dy = p.y() - centerCY, dz = p.z() - centerCZ;
             float squaredDist = dx * dx + dy * dy + dz * dz;
             float dot = 0f;
             float len = (float) Math.sqrt(squaredDist);
-            if (len > 0.001f && (dirX != 0 || dirY != 0 || dirZ != 0)) {
-                dot = (dx / len) * dirX + (dy / len) * dirY + (dz / len) * dirZ;
+            if (len > 0.001f && (nearest.dirX() != 0 || nearest.dirY() != 0 || nearest.dirZ() != 0)) {
+                dot = (dx / len) * nearest.dirX()
+                    + (dy / len) * nearest.dirY()
+                    + (dz / len) * nearest.dirZ();
             }
             return squaredDist * (1.0 - dot * 0.5);
         }));
@@ -410,6 +426,10 @@ public class World implements BlockView {
 
         // --- Distance pass: guarantees background progress regardless of look direction ---
         generationQueue.sort(Comparator.comparingInt(p -> {
+            ViewerInfo nearest = findNearestViewer(p, viewers);
+            int centerCX = Math.floorDiv((int) nearest.x(), Chunk.SIZE);
+            int centerCY = Math.floorDiv((int) nearest.y(), Chunk.SIZE);
+            int centerCZ = Math.floorDiv((int) nearest.z(), Chunk.SIZE);
             int dx = p.x() - centerCX, dy = p.y() - centerCY, dz = p.z() - centerCZ;
             return dx * dx + dy * dy + dz * dz;
         }));
@@ -423,6 +443,30 @@ public class World implements BlockView {
             submitToExecutor(pos);
             submitted++;
         }
+    }
+
+    private ViewerInfo findNearestViewer(ChunkPos pos, List<ViewerInfo> viewers) {
+        ViewerInfo nearest = viewers.get(0);
+        int nearestDistSq = chunkDistanceSq(pos, nearest);
+        for (int i = 1; i < viewers.size(); i++) {
+            ViewerInfo candidate = viewers.get(i);
+            int distSq = chunkDistanceSq(pos, candidate);
+            if (distSq < nearestDistSq) {
+                nearest = candidate;
+                nearestDistSq = distSq;
+            }
+        }
+        return nearest;
+    }
+
+    private int chunkDistanceSq(ChunkPos pos, ViewerInfo viewer) {
+        int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
+        int centerCY = Math.floorDiv((int) viewer.y(), Chunk.SIZE);
+        int centerCZ = Math.floorDiv((int) viewer.z(), Chunk.SIZE);
+        int dx = pos.x() - centerCX;
+        int dy = pos.y() - centerCY;
+        int dz = pos.z() - centerCZ;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     /**

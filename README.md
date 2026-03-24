@@ -68,21 +68,25 @@ com.voxelgame.
 ├── common/                    ← shared types: Block, BlockView, Chunk, network packets
 ├── server/                    ← headless server — zero GL/LWJGL dependency
 │   ├── GameServer.java        ← 20 TPS game loop
-│   ├── ServerWorld.java       ← chunk streaming per player
+│   ├── PlayerSession.java     ← per-client state: position, yaw/pitch, loaded chunks, visible players
+│   ├── ServerWorld.java       ← per-player chunk streaming + dynamic player visibility
 │   └── storage/               ← FlatFileChunkStorage, WorldMeta (seed persistence)
 ├── client/
 │   ├── ClientWorld.java       ← receives chunks from server, meshes + renders; reset()
 │   └── network/
 ├── engine/                    ← GL/GLFW systems — main thread only
 │   ├── ui/                    ← GlyphAtlas, UiShader, UiRenderer (batched 2D quads)
+│   │                             UiTheme (abstract), DarkTheme, LightTheme
 │   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, ...
 └── game/
-    ├── screen/                ← Screen, ScreenManager, MainMenu, WorldSelect, PauseMenu
-    └── World, TerrainGenerator, ChunkMesher, Player
+    ├── screen/                ← Screen, ScreenManager, MainMenu, WorldSelect, PauseMenu,
+    │                             MultiplayerConnectScreen
+    └── World (multi-viewer streaming), TerrainGenerator, ChunkMesher, Player
 ```
 
 ### Network Protocol
-Custom binary TCP via Netty. Wire format: `[4-byte length][1-byte packet ID][payload]`.
+Custom binary TCP via Netty.
+Wire format: `[4-byte length][1-byte packet ID][payload]`.
 Default port: **24463**.
 
 ## Project Structure
@@ -145,9 +149,10 @@ decisions, and lessons learned — including honest notes on AI assistance.
     - [x] 6B-5 — Multiplayer connect screen (IP/port input, direct server connect)
     - [x] 6B-6 — In-game pause menu (overlay, Resume / Main Menu / Quit)
     - [x] 6B-theme — UI Theme system (UiTheme, DarkTheme, LightTheme)
+    - [x] Multiplayer bug fixes (chunk load order, block-in-hitbox, per-player streaming, player visibility)
     - [ ] 6B-7 — Settings stub
   - [ ] 6C — Lighting + Day/Night Cycle
-  - [ ] 6D — Entity System + Player Model
+  - [ ] 6D — Entity System + Player Model (nametags deferred to here)
   - [ ] 6E — Items + Inventory
 - [ ] Phase 7 — Modding API
   - [ ] Block / item / entity registry hooks exposed to external code

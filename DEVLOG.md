@@ -2601,6 +2601,210 @@ Deferred to the next session — do this before any other work.
 
 ---
 
+## Entry 043 — Multiplayer Bug Fix: Chunk Load Order (Nearest-First Streaming)
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+- Fixed chunk streaming wave pattern on second client join. Root cause: `ServerWorld.streamChunksToPlayer`
+  iterated the server's `HashSet<ChunkPos>` in undefined hash-table order. Spawn
+  chunks arrived in arbitrary sequence, causing the player to fall through the ground
+  before the terrain underfoot loaded.
+- Replaced the unordered iteration with a sort step: unsent chunks are collected into
+  a `List`, sorted by squared chunk-distance from the player's current chunk position,
+  then streamed nearest-first. Spawn chunk scores 0 and always goes first.
+- Added `chunkDistSq(dx, dy, dz)` private static helper for the sort (later removed
+  when direction bias was added — see Entry 044).
+
+### Decisions Made
+- Sort on every call to `streamChunksToPlayer`, not just on first join. The player
+  moves between ticks; the nearest-first order stays correct dynamically.
+- Squared distance used throughout — avoids `Math.sqrt()` with identical ordering.
+
+### Problems Encountered
+- None. Fix confirmed working on first test.
+
+### AI Assistance Notes
+- Claude diagnosed root cause and wrote the fix.
+
+### Lessons / Observations
+- A `HashSet` iteration order that "happens to work" in singleplayer falls apart in
+  multiplayer where the set is populated from a different starting point per player.
+  Whenever order matters, sort explicitly — never rely on map/set iteration order.
+
+---
+
+## Entry 044 — Multiplayer Bug Fix: Block Placement Inside Player Hitboxes
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+- Added server-side hitbox check to `ServerWorld.applyBlockPlace`. Before applying
+  a block placement, the server now tests the target block's unit cube against every
+  connected player's AABB. If any player overlaps, the placement is silently rejected
+  — no `BlockChangePacket` is broadcast.
+- Added `isBlockInsideAnyPlayer(worldX, worldY, worldZ)` private helper to
+  `ServerWorld`. Player AABB mirrors `PhysicsBody` constants: 0.6 × 1.8 × 0.6,
+  origin at feet (px, py, pz).
+- Standard AABB overlap test: two boxes overlap only when all three axes overlap
+  simultaneously (`blockMax > playerMin && blockMin < playerMax` on X, Y, Z).
+
+### Decisions Made
+- Rejection is silent (no error packet to client). The client's local guard already
+  prevents the local player from placing inside themselves; the server guard covers
+  other players. Sending an explicit rejection packet is unnecessary complexity at
+  this stage.
+- Threading note preserved: called from Netty I/O thread, reads `players` ArrayList.
+  Same race as `broadcastBlockChange` — documented as acceptable until block actions
+  are queued through the tick thread.
+
+### Problems Encountered
+- None.
+
+### AI Assistance Notes
+- Claude wrote the fix.
+
+---
+
+## Entry 045 — Direction-Biased Chunk Streaming (Server-Side)
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+- Restored look-direction bias to chunk streaming in multiplayer. Previously `ServerWorld`
+  passed `(0, 0, 0)` as direction to `World.update()` — generation queue bias was
+  dead in multiplayer from the start.
+- Added `yaw` and `pitch` fields (volatile) to `PlayerSession`. Updated
+  `updatePosition()` to accept and store yaw/pitch. Added `getYaw()` / `getPitch()`.
+- Expanded `PendingMove` record to carry `yaw` and `pitch`.
+- Updated `queuePlayerMove()` signature to accept yaw and pitch. Updated
+  `ClientHandler` to pass `p.yaw()` and `p.pitch()` from `PlayerMoveSBPacket`.
+- `ServerWorld.tick()` now calls `yawPitchToDir(player.getYaw(), player.getPitch())`
+  per player and passes a real direction into `World.ViewerInfo`.
+- Applied the same 75/25 direction-biased sort to `streamChunksToPlayer` — chunks
+  in the player's look direction stream to the client first, background chunks still
+  guaranteed via the distance component.
+- Added `yawPitchToDir(float yaw, float pitch)` private static helper: converts
+  degrees to a normalised XYZ direction matching `GameLoop`'s look vector convention.
+- Removed `chunkDistSq` helper (now dead — replaced by the bias formula).
+
+### Decisions Made
+- Direction bias formula: `score = distSq * (1.0 - dot * 0.5)`. Multiplier range
+  0.5–1.5 — near chunks always beat far chunks regardless of look direction. A chunk
+  at distance 1 worst-case (1.5) still beats a chunk at distance 3 best-case (4.5).
+- Initial yaw/pitch default of 0 on join produces direction `(1, 0, 0)`. Spawn
+  chunks are perpendicular (dot ≈ 0) so they sort by pure distance — correct behaviour.
+
+### Problems Encountered
+- None. Confirmed working — chunks in look direction load visibly faster.
+
+### AI Assistance Notes
+- Claude diagnosed that direction bias was silently broken in multiplayer (hardcoded
+  zero direction) and wrote all changes.
+
+### Lessons / Observations
+- Data already on the wire (`PlayerMoveSBPacket` has yaw/pitch since Phase 5D) but
+  discarded by the receiving end. Check what packets already carry before adding new
+  fields — the data is often already there.
+
+---
+
+## Entry 046 — Multiplayer Bug Fix: Per-Player Independent Chunk Streaming
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+- Fixed bug where Player 2 could only receive chunks already loaded for Player 1.
+  Root cause: `World.update()` accepted a single viewer position — only `players.get(0)`
+  drove chunk generation. Player 2's area was never scheduled.
+- Refactored `World.update()` to accept `List<World.ViewerInfo>` — one entry per
+  connected player. Added public inner record `ViewerInfo(x, y, z, dirX, dirY, dirZ)`.
+- Updated `scheduleNeededChunks`, `drainPendingChunks`, `unloadDistantChunks`, and
+  `tickGenerationQueue` to operate on a viewer list:
+  - Schedule: scans around every viewer's center chunk.
+  - Drain: discards results only if out of range of ALL viewers.
+  - Unload: keeps a chunk if ANY viewer is in range.
+  - Generation queue sort: finds nearest viewer per candidate chunk for direction/distance scoring.
+- Schedule guard updated from three `lastScheduledCX/Y/Z` ints to a
+  `Set<ChunkPos> lastViewerChunks` — reschedules only when the set of viewer center
+  chunks changes.
+- Made `RENDER_DISTANCE_H` and `RENDER_DISTANCE_V` `public static final` so
+  `ServerWorld` can use them for the visibility range check.
+- Fixed per-player streaming unload condition in `streamChunksToPlayer`: a chunk is
+  now unloaded from a player if the server dropped it OR if it left that player's
+  personal render distance. Previously, Player 2's chunks stayed on Player 1's client
+  because the server kept them loaded for Player 2 — the personal range check fixes this.
+- `ServerWorld.tick()` builds a `List<ViewerInfo>` from all connected players each
+  tick and passes it to `world.update()`.
+
+### Decisions Made
+- Copilot handled the `World.java` multi-viewer refactor via a structured prompt.
+  Claude wrote the `ServerWorld` streaming and unload changes.
+- "Union load, intersection unload" rule: load for any viewer, unload when no viewer
+  needs it. Simple, correct, no edge cases.
+
+### Problems Encountered
+- None on first test after applying both sets of changes.
+
+### AI Assistance Notes
+- Claude diagnosed root cause, designed the fix, wrote the `ServerWorld` changes,
+  and provided the Copilot prompt for the `World.java` refactor.
+- Copilot executed the `World.java` multi-viewer refactor.
+
+### Lessons / Observations
+- `World.update()` taking a single position was flagged in Phase 4 as a known
+  limitation ("Phase 5+: `update(Collection<Vector3f>)`"). The fix was deferred but
+  the design was always clear — composition over multiple viewers is the right model.
+
+---
+
+## Entry 047 — Multiplayer Bug Fix: Dynamic Player Visibility (Spawn/Despawn by Range)
+**Date:** 24.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+- Fixed ghost player model bug: when two players moved out of each other's render
+  distance, the remote player model froze at last known position and never disappeared.
+  Root cause: `PlayerMoveCBPacket` was range-gated (Entry 046) but `RemotePlayer`
+  objects were never removed from `ClientWorld.remotePlayers`.
+- Added `visiblePlayerIds` (`HashSet<Integer>`) to `PlayerSession`. Three methods:
+  `isPlayerVisible(id)`, `addVisiblePlayer(id)`, `removeVisiblePlayer(id)`.
+- Replaced the static spawn-on-connect / despawn-on-disconnect announcements in
+  `ServerWorld.tick()` with a per-tick visibility management loop. For every ordered
+  pair of players:
+  - In range + not visible → send `PlayerSpawnPacket`, call `addVisiblePlayer`
+  - Out of range + visible → send `PlayerDespawnPacket`, call `removeVisiblePlayer`
+  - In range + already visible → send `PlayerMoveCBPacket` (position update)
+- Disconnect path updated: `PlayerDespawnPacket` only sent to sessions that had the
+  disconnecting player visible; `removeVisiblePlayer` called on those sessions.
+- Player join path simplified: new player just added to the list. Visibility loop
+  handles the spawn announcement on the first tick where they are in range.
+
+### Decisions Made
+- Visibility and position updates unified into one loop — three mutually exclusive
+  cases per player pair, cleanly handled by if/else if/else. No separate broadcast
+  loops.
+- Range check uses horizontal distance only (X/Z squared), matching `World`'s
+  horizontal render distance constant. Y distance not included — same convention as
+  chunk streaming.
+- `RENDER_DISTANCE_H * Chunk.SIZE` gives the visibility radius in world units.
+  Squared for the comparison to avoid sqrt.
+
+### Problems Encountered
+- None. Both bugs (seeing other player's chunks, frozen ghost model) confirmed fixed.
+
+### AI Assistance Notes
+- Claude diagnosed both bugs, designed the unified visibility loop, and wrote all changes.
+
+### Lessons / Observations
+- Spawn/despawn must be symmetrical events tied to the same condition (range check),
+  not to connection lifecycle. Tying them to connect/disconnect is correct for the
+  disconnection case but wrong for players who are connected but far apart.
+- The client is now fully server-driven for player model lifecycle: it renders exactly
+  what the server tells it to render. No client-side filtering needed.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

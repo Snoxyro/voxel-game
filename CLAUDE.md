@@ -63,8 +63,8 @@ src/main/java/com/voxelgame/
 ├── server/                    ← headless server: no GL, no LWJGL, no engine imports
 │   ├── ServerMain.java        ← dedicated server entry point (./gradlew runServer)
 │   ├── GameServer.java        ← 20 TPS game loop, player login/disconnect callbacks
-│   ├── PlayerSession.java     ← per-client state: channel, position, loaded chunk set
-│   ├── ServerWorld.java       ← wraps World, drives chunk streaming per player
+│   ├── PlayerSession.java     ← per-client state: channel, position, yaw/pitch, loaded chunks, visible players
+│   ├── ServerWorld.java       ← wraps World, drives chunk streaming + player visibility per player
 │   ├── network/
 │   │   ├── ServerNetworkManager.java
 │   │   └── ClientHandler.java
@@ -102,7 +102,7 @@ src/main/java/com/voxelgame/
 │   │   ├── WorldSelectScreen.java     ← world list, create, delete, launch; statusMessage for launch errors
 │   │   ├── PauseMenuScreen.java       ← overlay; Resume / Main Menu / Quit
 │   │   └── MultiplayerConnectScreen.java ← IP+port input, direct connect, cancelledFlag abort pattern
-│   ├── World.java
+│   ├── World.java             ← chunk data management; multi-viewer update(List<ViewerInfo>)
 │   ├── TerrainGenerator.java
 │   ├── ChunkMesher.java
 │   ├── Player.java
@@ -173,18 +173,35 @@ component owned by `Player` — the pattern to follow.
 - Button centering always uses `r.measureText(label)` — never hardcoded character widths
 - `isOverlay()` flag controls whether `GameLoop.loop()` skips or keeps the world render
 
-### 10. UI Theme (Planned)
-All color constants and common draw helpers (`drawButton`, `drawPanel`, `drawInputField`)
-are currently duplicated per screen. This will be consolidated into a `UiTheme` class
-in a future cleanup pass. When implementing new screens before that cleanup, follow the
-existing per-screen constant pattern — the theme refactor will sweep everything at once.
-
-### 11. UI Theme System
+### 10. UI Theme System
 `UiTheme` is an abstract class in `engine/ui/`. Subclasses set `protected int col*`
 fields (packed `0xRRGGBBAA`) and optionally override draw helpers. `ScreenManager`
 owns the active theme and exposes `setTheme(UiTheme)` — swapping themes requires no
 GL work. `ThemeRegistry` is deferred to Phase 7. All screens depend on `UiTheme`,
 never on `UiRenderer` directly. `Screen.render()` receives `UiTheme`, not `UiRenderer`.
+
+### 11. Multi-Viewer Chunk Streaming
+`World.update()` accepts `List<World.ViewerInfo>` — one entry per connected player.
+Each `ViewerInfo` carries position and normalised look direction. Chunks are loaded
+if in range of ANY viewer and unloaded only when out of range of ALL viewers.
+`ServerWorld` builds the viewer list from all connected players each tick.
+Each player's client only receives chunks within their own personal render distance —
+the server's loaded set is the union, but per-player streaming is range-gated.
+
+### 12. Per-Player Visibility (Player Models)
+`PlayerSession` tracks which remote player IDs each session has been told about via
+a `visiblePlayerIds` set. `ServerWorld` manages spawn/despawn dynamically each tick:
+when two players enter each other's render distance a `PlayerSpawnPacket` is sent;
+when they move out of range a `PlayerDespawnPacket` is sent. Position updates
+(`PlayerMoveCBPacket`) are only sent while visibility is active. This means the
+client never needs to filter — if it has a `RemotePlayer` entry, that player is
+visible; if not, no model is rendered.
+
+### 13. GL Resource Construction Timing
+Any class instantiated before `GameLoop.init()` must not create GL resources in its
+constructor or field initializers. The pattern is: nullable field + separate
+`initRenderResources()` method called from `GameLoop.init()` after `window.init()`.
+This has caused two crashes (Phase 5B, Phase 5D) — it is a hard rule.
 
 ## Development Phases
 - **Phase 0 (done):** Foundation — window, OpenGL context, game loop, triangle
@@ -204,12 +221,12 @@ never on `UiRenderer` directly. `Screen.render()` receives `UiTheme`, not `UiRen
   - **6B-4 (done):** World selection screen — list, create (name+seed), delete, launch
   - **6B-5 (done):** Multiplayer connect screen — IP/port input, direct server connect
   - **6B-6 (done):** In-game pause menu — overlay, Resume / Main Menu / Quit
-  - **6B-7 (next):** Settings stub
   - **6B-theme (done):** UI Theme system — UiTheme abstract class, DarkTheme, LightTheme
+  - **6B-7 (next):** Settings stub
 - **6C:** Lighting + Day/Night Cycle — skylight propagation, block light foundation,
   sun cycle, ambient light.
 - **6D:** Entity System + Player Model — entity framework, skeletal player model,
-  item drop entities.
+  item drop entities. Nametags above player models deferred to here.
 - **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.
 
 ## How to Build and Run
@@ -268,6 +285,3 @@ to replace, and provide the full replacement block. The codebase is large enough
 - Do not add `Mesh` or rendering code to `World.java` or `ServerWorld.java`
 - Do not construct GL resources (VAOs, VBOs, textures) in constructors of classes
   that are instantiated before GameLoop.init() — the GL context does not exist yet.
-  Use a separate `initRenderResources()` method called after `window.init()`
-- Do not hardcode character widths for UI text centering — always use `r.measureText()`
-- Do not call `screenManager.onKeyPress()` for the Escape key — `handleEscapeKey()` owns it

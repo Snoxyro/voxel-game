@@ -21,7 +21,10 @@ public final class PlayerSession {
     private volatile float x;
     private volatile float y;
     private volatile float z;
+    private volatile float yaw;
+    private volatile float pitch;
     private final Set<ChunkPos> loadedChunks = new HashSet<>();
+    private final Set<Integer> visiblePlayerIds = new HashSet<>();
 
     /**
      * Creates a new player session.
@@ -43,17 +46,21 @@ public final class PlayerSession {
     }
 
     /**
-     * Updates the player's known position. Called on the server tick thread
-     * after draining the pending move queue.
+     * Updates the player's known position and look direction. Called on the server
+     * tick thread after draining the pending move queue.
      *
-     * @param x world-space X
-     * @param y world-space Y (feet)
-     * @param z world-space Z
+     * @param x     world-space X
+     * @param y     world-space Y (feet)
+     * @param z     world-space Z
+     * @param yaw   look yaw in degrees
+     * @param pitch look pitch in degrees
      */
-    public void updatePosition(float x, float y, float z) {
-        this.x = x;
-        this.y = y;
-        this.z = z;
+    public void updatePosition(float x, float y, float z, float yaw, float pitch) {
+        this.x     = x;
+        this.y     = y;
+        this.z     = z;
+        this.yaw   = yaw;
+        this.pitch = pitch;
     }
 
     /**
@@ -146,5 +153,53 @@ public final class PlayerSession {
      */
     public float getZ() {
         return z;
+    }
+
+    // ADD these two getters at the bottom alongside getX/Y/Z:
+    /**
+     * Gets the look yaw in degrees.
+     *
+     * @return yaw
+     */
+    public float getYaw() {
+        return yaw;
+    }
+
+    /**
+     * Gets the look pitch in degrees.
+     *
+     * @return pitch
+     */
+    public float getPitch() {
+        return pitch;
+    }
+
+    /**
+     * Returns true if this player has been sent a spawn announcement for the given player ID.
+     * Used by ServerWorld to decide whether to send spawn, despawn, or move packets.
+     *
+     * @param playerId remote player ID to check
+     * @return true if currently visible to this player
+     */
+    public boolean isPlayerVisible(int playerId) {
+        return visiblePlayerIds.contains(playerId);
+    }
+
+    /**
+     * Marks a remote player as visible to this session.
+     *
+     * @param playerId remote player ID
+     */
+    public void addVisiblePlayer(int playerId) {
+        visiblePlayerIds.add(playerId);
+    }
+
+    /**
+     * Marks a remote player as no longer visible to this session.
+     *
+     * @param playerId remote player ID
+     */
+    public void removeVisiblePlayer(int playerId) {
+        visiblePlayerIds.remove(playerId);
     }
 }
