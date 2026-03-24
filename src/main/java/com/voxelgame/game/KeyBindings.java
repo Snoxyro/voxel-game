@@ -142,6 +142,31 @@ public class KeyBindings {
     }
 
     /**
+     * Creates a deep copy of this {@code KeyBindings} instance.
+     *
+     * @return a new {@code KeyBindings} object containing identical bindings
+     */
+    public KeyBindings copy() {
+        KeyBindings copy = new KeyBindings();
+        copy.bindings.clear();
+        copy.bindings.putAll(this.bindings);
+        return copy;
+    }
+
+    /**
+     * Replaces all current bindings with the entries in {@code newBindings}.
+     * Missing actions are set to {@link #UNBOUND}.
+     *
+     * @param newBindings source bindings map to copy from
+     */
+    public void setAll(EnumMap<Action, Integer> newBindings) {
+        bindings.clear();
+        for (Action action : Action.values()) {
+            bindings.put(action, newBindings.getOrDefault(action, UNBOUND));
+        }
+    }
+
+    /**
      * Returns the default code for the given action.
      *
      * @param action the action to query
@@ -208,22 +233,56 @@ public class KeyBindings {
         String name = GLFW.glfwGetKeyName(code, 0);
         if (name != null && !name.isBlank()) return name.toUpperCase();
         return switch (code) {
-            case GLFW.GLFW_KEY_SPACE        -> "Space";
-            case GLFW.GLFW_KEY_ENTER        -> "Enter";
-            case GLFW.GLFW_KEY_TAB          -> "Tab";
-            case GLFW.GLFW_KEY_BACKSPACE    -> "Backspace";
-            case GLFW.GLFW_KEY_DELETE       -> "Delete";
-            case GLFW.GLFW_KEY_ESCAPE       -> "Escape";
-            case GLFW.GLFW_KEY_LEFT         -> "Left";
-            case GLFW.GLFW_KEY_RIGHT        -> "Right";
-            case GLFW.GLFW_KEY_UP           -> "Up";
-            case GLFW.GLFW_KEY_DOWN         -> "Down";
+            case GLFW.GLFW_KEY_SPACE           -> "Space";
+            case GLFW.GLFW_KEY_ENTER           -> "Enter";
+            case GLFW.GLFW_KEY_KP_ENTER        -> "Num Enter";
+            case GLFW.GLFW_KEY_TAB             -> "Tab";
+            case GLFW.GLFW_KEY_BACKSPACE       -> "Backspace";
+            case GLFW.GLFW_KEY_DELETE          -> "Delete";
+            case GLFW.GLFW_KEY_INSERT          -> "Insert";
+            case GLFW.GLFW_KEY_ESCAPE          -> "Escape";
+            case GLFW.GLFW_KEY_LEFT            -> "← Left";
+            case GLFW.GLFW_KEY_RIGHT           -> "→ Right";
+            case GLFW.GLFW_KEY_UP              -> "↑ Up";
+            case GLFW.GLFW_KEY_DOWN            -> "↓ Down";
+            case GLFW.GLFW_KEY_HOME            -> "Home";
+            case GLFW.GLFW_KEY_END             -> "End";
+            case GLFW.GLFW_KEY_PAGE_UP         -> "Page Up";
+            case GLFW.GLFW_KEY_PAGE_DOWN       -> "Page Down";
             case GLFW.GLFW_KEY_LEFT_SHIFT,
-                 GLFW.GLFW_KEY_RIGHT_SHIFT  -> "Shift";
+                GLFW.GLFW_KEY_RIGHT_SHIFT     -> "Shift";
             case GLFW.GLFW_KEY_LEFT_CONTROL,
-                 GLFW.GLFW_KEY_RIGHT_CONTROL-> "Ctrl";
+                GLFW.GLFW_KEY_RIGHT_CONTROL   -> "Ctrl";
             case GLFW.GLFW_KEY_LEFT_ALT,
-                 GLFW.GLFW_KEY_RIGHT_ALT    -> "Alt";
+                GLFW.GLFW_KEY_RIGHT_ALT       -> "Alt";
+            case GLFW.GLFW_KEY_LEFT_SUPER,
+                GLFW.GLFW_KEY_RIGHT_SUPER     -> "Super";
+            case GLFW.GLFW_KEY_CAPS_LOCK       -> "Caps Lock";
+            case GLFW.GLFW_KEY_NUM_LOCK        -> "Num Lock";
+            case GLFW.GLFW_KEY_PRINT_SCREEN    -> "Print Scr";
+            case GLFW.GLFW_KEY_PAUSE           -> "Pause";
+            case GLFW.GLFW_KEY_F1              -> "F1";
+            case GLFW.GLFW_KEY_F2              -> "F2";
+            case GLFW.GLFW_KEY_F3              -> "F3";
+            case GLFW.GLFW_KEY_F4              -> "F4";
+            case GLFW.GLFW_KEY_F5              -> "F5";
+            case GLFW.GLFW_KEY_F6              -> "F6";
+            case GLFW.GLFW_KEY_F7              -> "F7";
+            case GLFW.GLFW_KEY_F8              -> "F8";
+            case GLFW.GLFW_KEY_F9              -> "F9";
+            case GLFW.GLFW_KEY_F10             -> "F10";
+            case GLFW.GLFW_KEY_F11             -> "F11";
+            case GLFW.GLFW_KEY_F12             -> "F12";
+            case GLFW.GLFW_KEY_KP_0            -> "Num 0";
+            case GLFW.GLFW_KEY_KP_1            -> "Num 1";
+            case GLFW.GLFW_KEY_KP_2            -> "Num 2";
+            case GLFW.GLFW_KEY_KP_3            -> "Num 3";
+            case GLFW.GLFW_KEY_KP_4            -> "Num 4";
+            case GLFW.GLFW_KEY_KP_5            -> "Num 5";
+            case GLFW.GLFW_KEY_KP_6            -> "Num 6";
+            case GLFW.GLFW_KEY_KP_7            -> "Num 7";
+            case GLFW.GLFW_KEY_KP_8            -> "Num 8";
+            case GLFW.GLFW_KEY_KP_9            -> "Num 9";
             default -> "Key " + code;
         };
     }

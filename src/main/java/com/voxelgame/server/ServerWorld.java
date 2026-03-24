@@ -271,13 +271,13 @@ public class ServerWorld {
      * @param player the player whose view area is checked
      * @return true if the chunk is within range
      */
-    private static boolean isInPlayerRange(ChunkPos pos, PlayerSession player) {
+    private boolean isInPlayerRange(ChunkPos pos, PlayerSession player) {
         int pcx = Math.floorDiv((int) player.getX(), Chunk.SIZE);
         int pcy = Math.floorDiv((int) player.getY(), Chunk.SIZE);
         int pcz = Math.floorDiv((int) player.getZ(), Chunk.SIZE);
         int dx = pos.x() - pcx, dy = pos.y() - pcy, dz = pos.z() - pcz;
-        return dx * dx + dz * dz <= World.RENDER_DISTANCE_H * World.RENDER_DISTANCE_H
-            && Math.abs(dy) <= World.RENDER_DISTANCE_V;
+        int rdh = world.getRenderDistanceH();
+        return dx * dx + dz * dz <= rdh * rdh && Math.abs(dy) <= World.RENDER_DISTANCE_V;
     }
 
     /**
@@ -368,6 +368,17 @@ public class ServerWorld {
             if (overlapX && overlapY && overlapZ) return true;
         }
         return false;
+    }
+
+    /**
+     * Propagates a render distance change from the settings system to the underlying world.
+     * Safe to call from any thread — {@link World#setRenderDistance} is thread-safe
+     * (only writes a volatile flag and a primitive field).
+     *
+     * @param chunks new horizontal render distance in chunk units
+     */
+    public void setRenderDistance(int chunks) {
+        world.setRenderDistance(chunks);
     }
 
     /**

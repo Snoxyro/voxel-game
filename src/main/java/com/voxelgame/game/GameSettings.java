@@ -45,7 +45,7 @@ public class GameSettings {
     public static final String  DEFAULT_USERNAME        = "Player";
     public static final int     DEFAULT_RENDER_DISTANCE = 8;
     public static final int     DEFAULT_FOV             = 70;
-    public static final float   DEFAULT_MOUSE_SENS      = 0.1f;
+    public static final float   DEFAULT_MOUSE_SENS      = 1.0f;
     public static final String  DEFAULT_THEME           = "dark";
     public static final boolean DEFAULT_VSYNC           = true;
     public static final WindowMode DEFAULT_WINDOW_MODE  = WindowMode.WINDOWED;
@@ -166,6 +166,22 @@ public class GameSettings {
      * corrupt the saved state.
      */
     public void save() {
+        try {
+            save(settingsPath);
+        } catch (IOException e) {
+            LOGGER.warning("Failed to save settings: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Saves all current settings to the provided path atomically. Writes to a
+     * {@code .tmp} file first, then renames over the real file so a crash
+     * mid-write cannot corrupt the saved state.
+     *
+     * @param targetPath output path for the settings file
+     * @throws IOException if writing the file fails
+     */
+    public void save(Path targetPath) throws IOException {
         Properties props = new Properties();
 
         props.setProperty(KEY_USERNAME,        username);
@@ -178,18 +194,15 @@ public class GameSettings {
 
         keyBindings.saveTo(props);
 
-        Path tmp = settingsPath.resolveSibling(settingsPath.getFileName() + ".tmp");
-        try {
-            Files.createDirectories(settingsPath.getParent());
-            try (OutputStream out = Files.newOutputStream(tmp)) {
-                props.store(out, "Voxel Game Settings");
-            }
-            Files.move(tmp, settingsPath, StandardCopyOption.REPLACE_EXISTING,
-                                          StandardCopyOption.ATOMIC_MOVE);
-            LOGGER.info("Settings saved to " + settingsPath);
-        } catch (IOException e) {
-            LOGGER.warning("Failed to save settings: " + e.getMessage());
+        Path tmp = targetPath.resolveSibling(targetPath.getFileName() + ".tmp");
+        Path parent = targetPath.getParent();
+        if (parent != null) Files.createDirectories(parent);
+        try (OutputStream out = Files.newOutputStream(tmp)) {
+            props.store(out, "Voxel Game Settings");
         }
+        Files.move(tmp, targetPath, StandardCopyOption.REPLACE_EXISTING,
+                                      StandardCopyOption.ATOMIC_MOVE);
+        LOGGER.info("Settings saved to " + targetPath);
     }
 
     // ── Parse helpers ─────────────────────────────────────────────────────────

@@ -16,13 +16,14 @@ import org.lwjgl.glfw.GLFW;
 public class PauseMenuScreen implements Screen {
 
     private static final int PANEL_W    = 280;
-    private static final int PANEL_H    = 220;
+    private static final int PANEL_H    = 272; // was 220 — extra button + gap
     private static final int BUTTON_W   = 200;
     private static final int BUTTON_H   = 40;
     private static final int BUTTON_GAP = 12;
 
     private final ScreenManager screenManager;
     private final Runnable      onResume;
+    private final Runnable      onSettings;
     private final Runnable      onMainMenu;
     private final Runnable      onQuit;
 
@@ -33,15 +34,18 @@ public class PauseMenuScreen implements Screen {
      *
      * @param screenManager the active screen manager — used to dismiss this screen on resume
      * @param onResume      called when the player clicks Resume; should recapture the cursor
+     * @param onSettings    called when the player clicks Settings; should open the settings screen
      * @param onMainMenu    called when the player clicks Main Menu; should disconnect and show menu
      * @param onQuit        called when the player clicks Quit; should close the window
      */
     public PauseMenuScreen(ScreenManager screenManager,
-                           Runnable onResume,
-                           Runnable onMainMenu,
-                           Runnable onQuit) {
+                        Runnable onResume,
+                        Runnable onSettings,
+                        Runnable onMainMenu,
+                        Runnable onQuit) {
         this.screenManager = screenManager;
         this.onResume      = onResume;
+        this.onSettings    = onSettings;
         this.onMainMenu    = onMainMenu;
         this.onQuit        = onQuit;
     }
@@ -76,13 +80,16 @@ public class PauseMenuScreen implements Screen {
         int btn1Y = panelY + 60;
         int btn2Y = btn1Y + BUTTON_H + BUTTON_GAP;
         int btn3Y = btn2Y + BUTTON_H + BUTTON_GAP;
+        int btn4Y = btn3Y + BUTTON_H + BUTTON_GAP;
 
         theme.drawButton(btnX, btn1Y, BUTTON_W, BUTTON_H, "Resume",
             hits(mouseX, mouseY, btnX, btn1Y, BUTTON_W, BUTTON_H));
-        theme.drawButton(btnX, btn2Y, BUTTON_W, BUTTON_H, "Main Menu",
+        theme.drawButton(btnX, btn2Y, BUTTON_W, BUTTON_H, "Settings",
             hits(mouseX, mouseY, btnX, btn2Y, BUTTON_W, BUTTON_H));
-        theme.drawButton(btnX, btn3Y, BUTTON_W, BUTTON_H, "Quit",
+        theme.drawButton(btnX, btn3Y, BUTTON_W, BUTTON_H, "Main Menu",
             hits(mouseX, mouseY, btnX, btn3Y, BUTTON_W, BUTTON_H));
+        theme.drawButton(btnX, btn4Y, BUTTON_W, BUTTON_H, "Quit",
+            hits(mouseX, mouseY, btnX, btn4Y, BUTTON_W, BUTTON_H));
     }
 
     @Override
@@ -94,10 +101,12 @@ public class PauseMenuScreen implements Screen {
         int btn1Y = (sh - PANEL_H) / 2 + 60;
         int btn2Y = btn1Y + BUTTON_H + BUTTON_GAP;
         int btn3Y = btn2Y + BUTTON_H + BUTTON_GAP;
+        int btn4Y = btn3Y + BUTTON_H + BUTTON_GAP;
 
         if      (hits(x, y, btnX, btn1Y, BUTTON_W, BUTTON_H)) { screenManager.setScreen(null); onResume.run(); }
-        else if (hits(x, y, btnX, btn2Y, BUTTON_W, BUTTON_H)) { onMainMenu.run(); }
-        else if (hits(x, y, btnX, btn3Y, BUTTON_W, BUTTON_H)) { onQuit.run(); }
+        else if (hits(x, y, btnX, btn2Y, BUTTON_W, BUTTON_H)) { onSettings.run(); }
+        else if (hits(x, y, btnX, btn3Y, BUTTON_W, BUTTON_H)) { onMainMenu.run(); }
+        else if (hits(x, y, btnX, btn4Y, BUTTON_W, BUTTON_H)) { onQuit.run(); }
     }
 
     @Override

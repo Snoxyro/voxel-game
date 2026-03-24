@@ -26,7 +26,7 @@ com.voxelgame.
 │   └── network/               ← wire protocol: Packet, PacketId, encoder, decoder, all packet records
 ├── server/                    ← headless server — ZERO engine/GL imports
 │   ├── ServerMain.java
-│   ├── GameServer.java        ← 20 TPS game loop; constructors: (Path,int) and (Path,int,long)
+│   ├── GameServer.java        ← 20 TPS game loop; setRenderDistance(int) delegates to ServerWorld
 │   ├── PlayerSession.java     ← per-client: channel, x/y/z, yaw/pitch, loadedChunks, visiblePlayerIds
 │   ├── ServerWorld.java       ← multi-viewer World.update(); per-player chunk streaming and visibility
 │   ├── network/               ← ServerNetworkManager, ClientHandler
@@ -42,18 +42,30 @@ com.voxelgame.
 │   │   ├── UiTheme.java       ← abstract; protected int col* fields + drawButton/drawPanel/drawInputField etc.
 │   │   ├── DarkTheme.java     ← default theme
 │   │   └── LightTheme.java    ← alternate theme
-│   ├── GameLoop.java          ← owns ScreenManager; launchWorld(), returnToMainMenu(), handleEscapeKey()
-│   ├── InputHandler.java      ← resetMouseDelta() — call after cursor recapture to prevent camera jump
-│   └── Camera, Window, ShaderProgram, Mesh, TextureManager, HudRenderer, BlockHighlightRenderer
+│   ├── GameLoop.java          ← owns ScreenManager + GameSettings; launchWorld(), returnToMainMenu(),
+│   │                             openSettings(), applySettings(), createPauseMenu(), isSessionActive()
+│   ├── Camera.java            ← setFov(int degrees) — mutable, driven by GameSettings
+│   ├── InputHandler.java      ← resetMouseDelta(), consumeMouseClick(), wasKeyJustPressed(),
+│   │                             onKeyPressed(), clearJustPressed()
+│   └── Window, ShaderProgram, Mesh, TextureManager, HudRenderer, BlockHighlightRenderer
 └── game/
     ├── screen/
-    │   ├── Screen.java                   ← interface; render(UiTheme,w,h); isOverlay() default false
+    │   ├── Screen.java                   ← interface; render(UiTheme, float deltaTime, int w, int h);
+    │   │                                    isOverlay() default false
     │   ├── ScreenManager.java            ← owns UiTheme; setTheme(), getTheme(), renderActiveScreen()
-    │   ├── MainMenuScreen.java           ← 3 callbacks: onSingleplayer, onMultiplayer, onQuit
+    │   ├── MainMenuScreen.java           ← 4 callbacks: onSingleplayer, onMultiplayer, onSettings, onQuit
     │   ├── WorldSelectScreen.java        ← statusMessage field + setStatusMessage() for launch errors
-    │   ├── PauseMenuScreen.java          ← isOverlay() = true
-    │   └── MultiplayerConnectScreen.java ← ConnectHandler FI; cancelledFlag abort; connecting lock
-    └── World (ViewerInfo record; update(List<ViewerInfo>)), TerrainGenerator, ChunkMesher, Player, ChunkStorage
+    │   ├── PauseMenuScreen.java          ← isOverlay() = true; 4 callbacks incl. onSettings
+    │   ├── MultiplayerConnectScreen.java ← ConnectHandler FI; cancelledFlag abort; connecting lock
+    │   └── SettingsScreen.java           ← tabbed settings (Gameplay/Graphics/Display/Controls/Keybinds/Sound);
+    │                                        working-copy pattern; focusedSlider for arrow-key nudge
+    ├── Action.java            ← enum of all bindable actions; displayName for UI
+    ├── KeyBindings.java       ← EnumMap<Action,Integer>; MOUSE_BUTTON_OFFSET=1000; displayName(int);
+    │                             copy(), setAll(); full key name table (F1-F12, Home, End, etc.)
+    ├── GameSettings.java      ← settings.properties persistence; load/save atomic; WindowMode enum;
+    │                             DEFAULT_MOUSE_SENS=1.0f (human-readable; 0.1f base applied at camera)
+    └── World (ViewerInfo record; update(List<ViewerInfo>); setRenderDistance(int) — live mutable field),
+        TerrainGenerator, ChunkMesher, Player, ChunkStorage
 ```
 
 ## Architecture Principles
@@ -88,39 +100,6 @@ from all connected players every tick. Each player's client only receives chunks
 within their own personal render distance — the server loaded set is the union, but
 per-player streaming is range-gated.
 
-### Per-Player Visibility (Player Models)
-`PlayerSession.visiblePlayerIds` tracks which remote players each session knows about.
-`ServerWorld` sends `PlayerSpawnPacket` when two players enter range and
-`PlayerDespawnPacket` when they leave. Position updates are only sent while visibility
-is active. The client never filters — it renders exactly what the server has told it.
-
-### Network Protocol
-Wire format: `[4-byte length][1-byte packet ID][payload]`. When adding a new packet:
-1. Add an ID to `PacketId` enum
-2. Create a record in `common/network/packets/` implementing `Packet`
-3. Add a serialization branch to `PacketEncoder`
-4. Add a deserialization branch to `PacketDecoder`
-All four files must be updated together.
-
-### Singleplayer = Embedded Server
-`Main.java` is now minimal. `GameLoop.launchWorld(worldName, seed)` handles the full
-server lifecycle on a background thread. `returnToMainMenu()` handles teardown.
-No separate singleplayer code path. Ever.
-
-### Screen System Rules
-- `Screen.isOverlay()` returning false (default): world render is skipped, only screen renders
-- `Screen.isOverlay()` returning true: world renders first, screen draws on top
-- `GameLoop.handleEscapeKey()` owns all Escape key behavior — screens must not intercept
-  Escape via `onKeyPress()` unless they are a non-overlay screen (WorldSelect, CreateNew substate)
-- After recapturing the cursor, always call `inputHandler.resetMouseDelta()` to prevent
-  the camera from lurching by however far the cursor traveled during the menu
-- Button text centering always uses `r.measureText(label)` — never hardcoded character widths
-
-### Engine/Game Separation
-`engine/` never imports from `game/` or `server/`. `game/` never imports from
-`engine/`. `server/` never imports from `engine/`. `common/` never imports from
-any of the others.
-
 ### Composition Over Inheritance
 ECS is the target architecture. `PhysicsBody` is owned by `Player` as a component.
 No deep inheritance hierarchies.
@@ -140,16 +119,17 @@ for the world-launch background thread to post GL-thread work.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 6 — Foundation for extensibility. Sub-phase 6B almost complete.
+Phase 6 — Foundation for extensibility. Phase 6B complete. Next: 6C Lighting.
 
 ### Phase 6 status
 - 6A done: Block Registry
-- 6B-theme done: UiTheme abstract class, DarkTheme, LightTheme; Screen.render() takes UiTheme
-- 6B-1 through 6B-6 done: full UI screen system
-- Multiplayer bugs fixed: chunk load order (nearest-first), block-in-hitbox rejection,
-  per-player independent chunk streaming (World multi-viewer), per-player player visibility
-  (dynamic spawn/despawn by render distance)
-- 6B-7 next: Settings stub
+- 6B done: Full UI/menu system including settings
+  - UiTheme system, DarkTheme, LightTheme
+  - Main menu, world select, multiplayer connect, pause menu
+  - GameSettings, KeyBindings, Action — persistent settings.properties
+  - SettingsScreen — tabbed UI (Gameplay/Graphics/Display/Controls/Keybinds/Sound)
+  - Live render distance, live FOV/VSync/theme/window mode on save
+  - Multiplayer bugs fixed: chunk load order, block-in-hitbox, per-player streaming, visibility
 
 ### After 6B
 - 6C: Lighting + Day/Night Cycle
@@ -172,12 +152,21 @@ Phase 6 — Foundation for extensibility. Sub-phase 6B almost complete.
 - Call `inputHandler.resetMouseDelta()` after every cursor recapture to prevent
   camera jump. Failing to do this causes the camera to snap by the distance the
   free cursor traveled while the menu was open.
+- Call `inputHandler.consumeMouseClick()` after any UI click that transitions back
+  to gameplay (e.g. Resume button). Without this, the click bleeds into game input
+  and fires wasMouseButtonJustPressed on the next frame.
 - Button/title text centering must use `r.measureText()` — hardcoded `length * N`
   values are always wrong for proportional or atlas-based fonts.
-- Screen.render() takes UiTheme, not UiRenderer — never add UiRenderer as a screen parameter
+- Screen.render() signature: `(UiTheme theme, float deltaTime, int sw, int sh)` —
+  never add UiRenderer as a screen parameter; never drop deltaTime
 - All colors in themes are packed 0xRRGGBBAA ints — never use float r,g,b,a in screen code
-- World.RENDER_DISTANCE_H and RENDER_DISTANCE_V are public static final — used by
-  ServerWorld for the visibility range check. Never make them package-private.
+- World.renderDistanceH is a mutable instance field driven by GameSettings.
+  Use world.getRenderDistanceH() / world.setRenderDistance(int). Never make it static again.
+- Mouse sensitivity stored as human-readable multiplier (1.0 = normal feel).
+  The 0.1f base scale factor is applied at the camera rotation call site in GameLoop,
+  not stored in GameSettings. Do not change this — it would break saved settings.
+- Do not revert World.update() to a single-viewer signature — it accepts
+  List<World.ViewerInfo> and that is a locked architecture decision
 
 ## What NOT to Do
 - Do not suggest switching to Maven
@@ -190,5 +179,3 @@ Phase 6 — Foundation for extensibility. Sub-phase 6B almost complete.
 - Do not hardcode character widths for UI centering — use `r.measureText()`
 - Do not intercept Escape key in screen `onKeyPress()` for overlay screens —
   `GameLoop.handleEscapeKey()` owns that behavior
-- Do not revert World.update() to a single-viewer signature — it accepts
-  List<World.ViewerInfo> and that is a locked architecture decision

@@ -34,11 +34,30 @@ import java.util.concurrent.*;
  */
 public class World implements BlockView {
 
-    /** Horizontal circular chunk load radius in chunk units. */
+    /**
+     * Default horizontal chunk load radius in chunk units.
+     * Used to initialize {@link #renderDistanceH} and as the fallback for any
+     * code that needs a compile-time default.
+     */
     public static final int RENDER_DISTANCE_H = 16;
 
-    /** Vertical chunk load radius in chunk units (above and below viewer). */
+    /** Vertical chunk load radius in chunk units (above and below viewer). Fixed — not user-configurable yet. */
     public static final int RENDER_DISTANCE_V = 8;
+
+    /**
+     * Current horizontal chunk load radius, driven by {@link com.voxelgame.game.GameSettings}.
+     * Mutable — call {@link #setRenderDistance(int)} to change it.
+     * All internal streaming methods read this field, not the static constant.
+     */
+    private int renderDistanceH = RENDER_DISTANCE_H;
+
+    /**
+     * When true, {@link #update} will run an immediate unload sweep at the start of the
+     * next tick before anything else. Set by {@link #setRenderDistance(int)} when
+     * the distance decreases, so newly out-of-range chunks are evicted without waiting
+     * for the normal scheduler cycle.
+     */
+    private volatile boolean pendingUnloadSweep = false;
 
     /** Maximum chunk uploads (data stores) per frame from the pending queue. */
     private static final int MAX_UPLOADS_PER_FRAME = 256;
@@ -121,6 +140,44 @@ public class World implements BlockView {
         this.storage = storage;
     }
 
+    /**
+     * Returns the current horizontal render distance in chunk units.
+     *
+     * @return horizontal chunk radius
+     */
+    public int getRenderDistanceH() {
+        return renderDistanceH;
+    }
+
+    /**
+     * Sets the horizontal render distance. Clamped to [2, 32].
+     *
+     * <p>If the new value is smaller than the current value, schedules an immediate
+     * unload sweep at the top of the next {@link #update} tick so newly out-of-range
+     * chunks are removed within one server tick (~50 ms).
+     *
+     * <p>If the new value is larger, no special action is needed — the next
+     * {@link #scheduleNeededChunks} call will pick up the expanded outer ring
+     * automatically.
+     *
+     * @param chunks new horizontal radius in chunk units
+     */
+    public void setRenderDistance(int chunks) {
+        int clamped = Math.max(2, Math.min(32, chunks));
+        if (clamped < renderDistanceH) {
+            // Shrinking: trigger an unload sweep on the next update() tick.
+            // Also invalidate the schedule guard so scheduleNeededChunks re-runs —
+            // not strictly needed when shrinking (no new chunks to load), but it
+            // keeps the guard consistent.
+            lastViewerChunks.clear();
+            pendingUnloadSweep = true;
+        } else if (clamped > renderDistanceH) {
+            // Growing: invalidate the schedule guard so the next tick expands the load area.
+            lastViewerChunks.clear();
+        }
+        renderDistanceH = clamped;
+    }
+
     // -------------------------------------------------------------------------
     // Main update — call once per tick on the server tick thread
     // -------------------------------------------------------------------------
@@ -131,6 +188,13 @@ public class World implements BlockView {
      * @param viewers active viewer positions and look directions
      */
     public void update(List<ViewerInfo> viewers) {
+        // If render distance was reduced, do an immediate unload sweep before anything else.
+        // This evicts newly out-of-range chunks within one tick of the setting change.
+        if (pendingUnloadSweep) {
+            pendingUnloadSweep = false;
+            unloadDistantChunks(viewers);
+        }
+
         drainPendingChunks(viewers);
 
         Set<ChunkPos> viewerChunks = new HashSet<>();
@@ -276,10 +340,10 @@ public class World implements BlockView {
             int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
             int centerCY = Math.floorDiv((int) viewer.y(), Chunk.SIZE);
             int centerCZ = Math.floorDiv((int) viewer.z(), Chunk.SIZE);
-            for (int cx = centerCX - RENDER_DISTANCE_H; cx <= centerCX + RENDER_DISTANCE_H; cx++) {
-                for (int cz = centerCZ - RENDER_DISTANCE_H; cz <= centerCZ + RENDER_DISTANCE_H; cz++) {
+            for (int cx = centerCX - renderDistanceH; cx <= centerCX + renderDistanceH; cx++) {
+                for (int cz = centerCZ - renderDistanceH; cz <= centerCZ + renderDistanceH; cz++) {
                     int dx = cx - centerCX, dz = cz - centerCZ;
-                    if (dx * dx + dz * dz > RENDER_DISTANCE_H * RENDER_DISTANCE_H) continue;
+                    if (dx * dx + dz * dz > renderDistanceH * renderDistanceH) continue;
                     for (int cy = centerCY - RENDER_DISTANCE_V; cy <= centerCY + RENDER_DISTANCE_V; cy++) {
                         if (cy < 0) continue;
                         ChunkPos pos = new ChunkPos(cx, cy, cz);
@@ -356,7 +420,7 @@ public class World implements BlockView {
 
     private boolean isInRange(ChunkPos pos, int centerCX, int centerCY, int centerCZ) {
         int dx = pos.x() - centerCX, dy = pos.y() - centerCY, dz = pos.z() - centerCZ;
-        return dx * dx + dz * dz <= RENDER_DISTANCE_H * RENDER_DISTANCE_H
+        return dx * dx + dz * dz <= renderDistanceH * renderDistanceH
             && Math.abs(dy) <= RENDER_DISTANCE_V;
     }
 

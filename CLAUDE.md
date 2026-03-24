@@ -62,7 +62,7 @@ src/main/java/com/voxelgame/
 │           └── PlayerDespawnPacket.java
 ├── server/                    ← headless server: no GL, no LWJGL, no engine imports
 │   ├── ServerMain.java        ← dedicated server entry point (./gradlew runServer)
-│   ├── GameServer.java        ← 20 TPS game loop, player login/disconnect callbacks
+│   ├── GameServer.java        ← 20 TPS game loop, player login/disconnect callbacks; setRenderDistance()
 │   ├── PlayerSession.java     ← per-client state: channel, position, yaw/pitch, loaded chunks, visible players
 │   ├── ServerWorld.java       ← wraps World, drives chunk streaming + player visibility per player
 │   ├── network/
@@ -85,24 +85,29 @@ src/main/java/com/voxelgame/
 │   │   ├── UiTheme.java       ← abstract base: named color fields + compound draw helpers (drawButton, drawPanel, etc.)
 │   │   ├── DarkTheme.java     ← default built-in dark theme
 │   │   └── LightTheme.java    ← built-in light theme
-│   ├── GameLoop.java          ← main loop; owns ScreenManager, launchWorld(), returnToMainMenu()
-│   ├── Camera.java
+│   ├── GameLoop.java          ← main loop; owns ScreenManager, settings; launchWorld(), returnToMainMenu(),
+│   │                             openSettings(), applySettings(), createPauseMenu(), isSessionActive()
+│   ├── Camera.java            ← setFov(int degrees) — mutable FOV driven by GameSettings
 │   ├── Window.java
-│   ├── InputHandler.java      ← resetMouseDelta() prevents camera jump after cursor recapture
+│   ├── InputHandler.java      ← resetMouseDelta(), consumeMouseClick(), justPressedKeys edge detection
 │   ├── ShaderProgram.java
 │   ├── Mesh.java
 │   ├── TextureManager.java
 │   ├── HudRenderer.java
 │   └── BlockHighlightRenderer.java
-├── game/                      ← server-side gameplay logic
+├── game/                      ← server-side gameplay logic + client-only data types
 │   ├── screen/                ← Screen system
-│   │   ├── Screen.java                ← interface: render(UiTheme,w,h), onShow/Hide, input; isOverlay() default false
-│   │   ├── ScreenManager.java         ← owns UiTheme (swappable); setTheme(), renderActiveScreen()
-│   │   ├── MainMenuScreen.java        ← Singleplayer / Multiplayer / Quit
+│   │   ├── Screen.java                ← interface: render(UiTheme,float,w,h), onShow/Hide, input; isOverlay() default false
+│   │   ├── ScreenManager.java         ← owns UiTheme (swappable); setTheme(), getTheme(), renderActiveScreen()
+│   │   ├── MainMenuScreen.java        ← Singleplayer / Multiplayer / Settings / Quit
 │   │   ├── WorldSelectScreen.java     ← world list, create, delete, launch; statusMessage for launch errors
-│   │   ├── PauseMenuScreen.java       ← overlay; Resume / Main Menu / Quit
-│   │   └── MultiplayerConnectScreen.java ← IP+port input, direct connect, cancelledFlag abort pattern
-│   ├── World.java             ← chunk data management; multi-viewer update(List<ViewerInfo>)
+│   │   ├── PauseMenuScreen.java       ← overlay; Resume / Settings / Main Menu / Quit
+│   │   ├── MultiplayerConnectScreen.java ← IP+port input, direct connect, cancelledFlag abort pattern
+│   │   └── SettingsScreen.java        ← full tabbed settings: Gameplay/Graphics/Display/Controls/Keybinds/Sound
+│   ├── Action.java            ← enum of all bindable actions with displayName
+│   ├── KeyBindings.java       ← EnumMap<Action,Integer>; mouse offset encoding; displayName(int); copy/setAll
+│   ├── GameSettings.java      ← persistent settings (settings.properties); load/save atomic; WindowMode enum
+│   ├── World.java             ← chunk data management; renderDistanceH mutable via setRenderDistance()
 │   ├── TerrainGenerator.java
 │   ├── ChunkMesher.java
 │   ├── Player.java
@@ -166,8 +171,8 @@ component owned by `Player` — the pattern to follow.
 - Rule: never pass live mutable state between threads; always snapshot first
 
 ### 9. Screen System
-- `Screen` interface: `render()`, `onShow/Hide()`, input callbacks, `isOverlay()` (default false)
-- Full-screen menus (main menu, world select): replace world render entirely
+- `Screen` interface: `render(UiTheme, float deltaTime, int w, int h)`, `onShow/Hide()`, input callbacks, `isOverlay()` (default false)
+- Full-screen menus (main menu, world select, settings): replace world render entirely
 - Overlay screens (pause menu): world renders first, screen draws on top
 - `ScreenManager` owns `UiRenderer`, `GlyphAtlas`, `UiShader` — shared across all screens
 - Button centering always uses `r.measureText(label)` — never hardcoded character widths
@@ -185,49 +190,34 @@ never on `UiRenderer` directly. `Screen.render()` receives `UiTheme`, not `UiRen
 Each `ViewerInfo` carries position and normalised look direction. Chunks are loaded
 if in range of ANY viewer and unloaded only when out of range of ALL viewers.
 `ServerWorld` builds the viewer list from all connected players each tick.
-Each player's client only receives chunks within their own personal render distance —
-the server's loaded set is the union, but per-player streaming is range-gated.
 
 ### 12. Per-Player Visibility (Player Models)
 `PlayerSession` tracks which remote player IDs each session has been told about via
 a `visiblePlayerIds` set. `ServerWorld` manages spawn/despawn dynamically each tick:
 when two players enter each other's render distance a `PlayerSpawnPacket` is sent;
 when they move out of range a `PlayerDespawnPacket` is sent. Position updates
-(`PlayerMoveCBPacket`) are only sent while visibility is active. This means the
-client never needs to filter — if it has a `RemotePlayer` entry, that player is
-visible; if not, no model is rendered.
+(`PlayerMoveCBPacket`) are only sent while visibility is active.
 
 ### 13. GL Resource Construction Timing
 Any class instantiated before `GameLoop.init()` must not create GL resources in its
 constructor or field initializers. The pattern is: nullable field + separate
 `initRenderResources()` method called from `GameLoop.init()` after `window.init()`.
-This has caused two crashes (Phase 5B, Phase 5D) — it is a hard rule.
+This has caused two crashes in the project history — it is a hard rule.
 
-## Development Phases
-- **Phase 0 (done):** Foundation — window, OpenGL context, game loop, triangle
-- **Phase 1 (done):** Chunk system, flat world, player movement
-- **Phase 2 (done):** World generation (fBm noise, terrain layering)
-- **Phase 3 (done):** Gameplay basics — block placing/breaking, HUD, physics
-- **Phase 4 (done):** Performance — greedy meshing, AO, textures, async streaming
-- **Phase 5 (done):** Multiplayer — client/server split, chunk streaming, block sync
-- **Phase 6 (current):** Foundation for extensibility
-
-## Phase 6 Sub-phases
-- **6A (done):** Block Registry — Block enum → registered class with stable IDs.
-- **6B (current):** Menu / UI System
-  - **6B-1 (done):** UI rendering foundation — GlyphAtlas, UiShader, UiRenderer
-  - **6B-2 (done):** Screen abstraction — Screen, ScreenManager, GameLoop wiring
-  - **6B-3 (done):** Main menu — Singleplayer / Multiplayer / Quit
-  - **6B-4 (done):** World selection screen — list, create (name+seed), delete, launch
-  - **6B-5 (done):** Multiplayer connect screen — IP/port input, direct server connect
-  - **6B-6 (done):** In-game pause menu — overlay, Resume / Main Menu / Quit
-  - **6B-theme (done):** UI Theme system — UiTheme abstract class, DarkTheme, LightTheme
-  - **6B-7 (next):** Settings stub
-- **6C:** Lighting + Day/Night Cycle — skylight propagation, block light foundation,
-  sun cycle, ambient light.
-- **6D:** Entity System + Player Model — entity framework, skeletal player model,
-  item drop entities. Nametags above player models deferred to here.
-- **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.
+### 14. Settings System
+`GameSettings` is owned by `GameLoop` and passed via constructor injection. Never a
+static singleton — Phase 7 mod settings will use separate `GameSettings` instances
+pointing to different `.properties` files. `KeyBindings` (in `game/`) wraps an
+`EnumMap<Action, Integer>` where mouse buttons are offset by `MOUSE_BUTTON_OFFSET=1000`
+to avoid colliding with key codes. `World.renderDistanceH` is a mutable instance field
+(not a compile-time constant) driven by `GameSettings` — `setRenderDistance()` sets a
+`pendingUnloadSweep` flag so the unload happens on the next server tick.
+`GameLoop.applySettings()` applies all live-applicable settings immediately on save:
+VSync, FOV, window mode, theme, render distance. Mouse sensitivity is stored as a
+human-readable multiplier (1.0 = normal feel) and multiplied by a base factor of
+`0.1f` when applied to camera rotation. `InputHandler.consumeMouseClick()` must be
+called after any UI click that transitions back to gameplay to prevent the click from
+bleeding into game input (e.g. the Resume button breaking a block).
 
 ## How to Build and Run
 ```bash
@@ -284,4 +274,33 @@ to replace, and provide the full replacement block. The codebase is large enough
 - Do not import `engine/` from `server/` or `game/World.java`
 - Do not add `Mesh` or rendering code to `World.java` or `ServerWorld.java`
 - Do not construct GL resources (VAOs, VBOs, textures) in constructors of classes
-  that are instantiated before GameLoop.init() — the GL context does not exist yet.
+  that are instantiated before GameLoop.init() — the GL context does not exist yet
+- Do not make `World.renderDistanceH` static again — it is a live mutable field
+- Do not skip calling `inputHandler.consumeMouseClick()` after UI-to-gameplay transitions
+- Do not store mouse sensitivity as a raw camera multiplier — store as human-readable
+  (1.0 = normal) and apply the 0.1f base scale factor at the camera rotation call site
+
+## Development Phases
+- **Phase 0 (done):** Foundation — window, OpenGL context, game loop, triangle
+- **Phase 1 (done):** Chunk system, flat world, player movement
+- **Phase 2 (done):** World generation (fBm noise, terrain layering)
+- **Phase 3 (done):** Gameplay basics — block placing/breaking, HUD, physics
+- **Phase 4 (done):** Performance — greedy meshing, AO, textures, async streaming
+- **Phase 5 (done):** Multiplayer — client/server split, chunk streaming, block sync
+- **Phase 6 (current):** Foundation for extensibility
+  - **6A (done):** Block Registry — Block enum → registered class with stable IDs
+  - **6B (done):** Menu / UI System
+    - **6B-1 (done):** UI rendering foundation — GlyphAtlas, UiShader, UiRenderer
+    - **6B-2 (done):** Screen abstraction — Screen, ScreenManager, GameLoop wiring
+    - **6B-3 (done):** Main menu — Singleplayer / Multiplayer / Settings / Quit
+    - **6B-4 (done):** World selection screen — list, create (name+seed), delete, launch
+    - **6B-5 (done):** Multiplayer connect screen — IP/port input, direct server connect
+    - **6B-6 (done):** In-game pause menu — overlay, Resume / Settings / Main Menu / Quit
+    - **6B-theme (done):** UI Theme system — UiTheme abstract class, DarkTheme, LightTheme
+    - **6B-7 (done):** Full settings system — GameSettings, KeyBindings, Action, SettingsScreen
+  - **6C (next):** Lighting + Day/Night Cycle — skylight propagation, block light foundation,
+    sun cycle, ambient light.
+  - **6D:** Entity System + Player Model — entity framework, skeletal player model,
+    item drop entities. Nametags above player models deferred to here.
+  - **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.
+- **Phase 7:** Modding API

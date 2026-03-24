@@ -4,6 +4,8 @@ import org.lwjgl.glfw.GLFW;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.DoubleBuffer;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Handles keyboard and mouse input via GLFW polling.
@@ -27,6 +29,10 @@ public class InputHandler {
     private static final int MOUSE_BUTTON_COUNT = 8;
     private final boolean[] lastMouseButtons       = new boolean[MOUSE_BUTTON_COUNT];
     private final boolean[] mouseButtonJustPressed = new boolean[MOUSE_BUTTON_COUNT];
+
+    // Keys pressed this frame — cleared at the start of each update tick.
+    // Used for edge detection (pressed this frame but not last frame).
+    private final Set<Integer> justPressedKeys = new HashSet<>();
 
     /**
      * Creates an InputHandler for the given GLFW window.
@@ -83,6 +89,38 @@ public class InputHandler {
             mouseButtonJustPressed[i] = cur && !lastMouseButtons[i];
             lastMouseButtons[i] = cur;
         }
+    }
+    
+    /**
+     * Synchronises the last-seen mouse button state to the current physical state,
+     * then clears all just-pressed flags.
+     *
+     * <p>Call this after a UI click is consumed (e.g. Resume from pause menu) to
+     * prevent the click from bleeding into game input on the same frame. Without
+     * this, {@link #update()} will see the button transition from "up last frame"
+     * to "down this frame" and fire {@link #wasMouseButtonJustPressed(int)} even
+     * though the press was already handled by the UI.
+     */
+    public void consumeMouseClick() {
+        for (int i = 0; i < MOUSE_BUTTON_COUNT; i++) {
+            lastMouseButtons[i] = GLFW.glfwGetMouseButton(windowHandle, i) == GLFW.GLFW_PRESS;
+            mouseButtonJustPressed[i] = false;
+        }
+    }
+
+    /** Called from the GLFW key callback when a key is pressed (not repeated). */
+    public void onKeyPressed(int key) {
+        justPressedKeys.add(key);
+    }
+
+    /** Returns true if the key was pressed this frame (not held from last frame). */
+    public boolean wasKeyJustPressed(int key) {
+        return justPressedKeys.contains(key);
+    }
+
+    /** Clears edge-detection state. Call once per game loop tick, after processing input. */
+    public void clearJustPressed() {
+        justPressedKeys.clear();
     }
 
     /**

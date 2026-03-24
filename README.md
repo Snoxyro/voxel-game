@@ -32,9 +32,6 @@ cd voxel-game
 # Singleplayer (menu → world select → play)
 ./gradlew run
 
-# With username
-./gradlew run --args="--username Snoxy"
-
 # Dedicated headless server
 ./gradlew runServer
 ./gradlew runServer --args="--world survival --port 25565"
@@ -54,6 +51,9 @@ cd voxel-game
 | Escape (in-game) | Open pause menu |
 | Escape (in menu) | Back / Resume |
 
+All keybinds are rebindable in Settings → Keybinds. Settings are persisted to
+`settings.properties` in the working directory.
+
 ## Architecture
 
 Singleplayer runs as an embedded server on localhost — identical to Minecraft's
@@ -67,7 +67,7 @@ com.voxelgame.
 ├── Main.java                  ← minimal bootstrap: registries + GameLoop
 ├── common/                    ← shared types: Block, BlockView, Chunk, network packets
 ├── server/                    ← headless server — zero GL/LWJGL dependency
-│   ├── GameServer.java        ← 20 TPS game loop
+│   ├── GameServer.java        ← 20 TPS game loop; setRenderDistance()
 │   ├── PlayerSession.java     ← per-client state: position, yaw/pitch, loaded chunks, visible players
 │   ├── ServerWorld.java       ← per-player chunk streaming + dynamic player visibility
 │   └── storage/               ← FlatFileChunkStorage, WorldMeta (seed persistence)
@@ -77,11 +77,14 @@ com.voxelgame.
 ├── engine/                    ← GL/GLFW systems — main thread only
 │   ├── ui/                    ← GlyphAtlas, UiShader, UiRenderer (batched 2D quads)
 │   │                             UiTheme (abstract), DarkTheme, LightTheme
-│   └── GameLoop, Camera, Window, InputHandler, ShaderProgram, Mesh, ...
+│   └── GameLoop, Camera (setFov), Window, InputHandler (consumeMouseClick), ...
 └── game/
     ├── screen/                ← Screen, ScreenManager, MainMenu, WorldSelect, PauseMenu,
-    │                             MultiplayerConnectScreen
-    └── World (multi-viewer streaming), TerrainGenerator, ChunkMesher, Player
+    │                             MultiplayerConnectScreen, SettingsScreen
+    ├── Action.java            ← enum of all bindable actions
+    ├── KeyBindings.java       ← EnumMap<Action,Integer>; mouse offset encoding
+    ├── GameSettings.java      ← persistent settings; load/save; WindowMode enum
+    └── World (multi-viewer streaming; live renderDistanceH), TerrainGenerator, ChunkMesher, Player
 ```
 
 ### Network Protocol
@@ -95,6 +98,7 @@ src/main/java/com/voxelgame/   ← Java source
 src/main/resources/shaders/    ← GLSL shaders (default, hud, ui)
 docs/                          ← Architecture decisions and design notes
 worlds/                        ← World save directories (created at runtime)
+settings.properties            ← User settings (created at runtime)
 ```
 
 ## Development Log
@@ -141,16 +145,16 @@ decisions, and lessons learned — including honest notes on AI assistance.
   - [x] 5F — CLI args, world.dat seed file, configurable launch
 - [ ] Phase 6 — Foundation for extensibility
   - [x] 6A — Block Registry (Block enum → registered class, ID-stable saves)
-  - [ ] 6B — Menu / UI System
+  - [x] 6B — Menu / UI System
     - [x] 6B-1 — UI rendering foundation (GlyphAtlas, UiShader, UiRenderer)
     - [x] 6B-2 — Screen abstraction (Screen, ScreenManager, GameLoop wiring)
-    - [x] 6B-3 — Main menu (Singleplayer / Multiplayer / Quit)
+    - [x] 6B-3 — Main menu (Singleplayer / Multiplayer / Settings / Quit)
     - [x] 6B-4 — World selection screen (list, create with seed, delete, launch)
     - [x] 6B-5 — Multiplayer connect screen (IP/port input, direct server connect)
-    - [x] 6B-6 — In-game pause menu (overlay, Resume / Main Menu / Quit)
+    - [x] 6B-6 — In-game pause menu (overlay, Resume / Settings / Main Menu / Quit)
     - [x] 6B-theme — UI Theme system (UiTheme, DarkTheme, LightTheme)
     - [x] Multiplayer bug fixes (chunk load order, block-in-hitbox, per-player streaming, player visibility)
-    - [ ] 6B-7 — Settings stub
+    - [x] 6B-7 — Full settings system (GameSettings, KeyBindings, Action, SettingsScreen)
   - [ ] 6C — Lighting + Day/Night Cycle
   - [ ] 6D — Entity System + Player Model (nametags deferred to here)
   - [ ] 6E — Items + Inventory

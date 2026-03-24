@@ -61,6 +61,10 @@ public final class ScreenManager {
         return activeTheme;
     }
 
+    public UiRenderer getRenderer() {
+        return uiRenderer;
+    }
+
     // ── Screen lifecycle ──────────────────────────────────────────────────────
 
     /**

@@ -226,4 +226,14 @@ public class GameServer {
     public void setBindError(Throwable e) {
         this.bindError = e;
     }
+
+    /**
+     * Updates the server world's horizontal render distance.
+     * Called by {@code GameLoop} when the player saves settings.
+     *
+     * @param chunks new horizontal render distance in chunk units
+     */
+    public void setRenderDistance(int chunks) {
+        serverWorld.setRenderDistance(chunks);
+    }
 }

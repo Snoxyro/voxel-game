@@ -3069,6 +3069,163 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
+## Entry 051 — Settings Screen Polish
+**Date:** 25.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+- Fixed mouse sensitivity scale: `DEFAULT_MOUSE_SENS` changed from `0.1f` to `1.0f`.
+  Sensitivity is now stored as a human-readable multiplier (1.0 = normal, 2.0 = 2× faster).
+  A base factor of `0.1f` is applied at the camera rotation call site in `GameLoop` —
+  the stored value is never the raw camera multiplier. Old `settings.properties` must be
+  deleted on upgrade as the stored `0.1` would read as 10× slower than intended.
+- Fixed slider keyboard adjustment: added `focusedSlider` int field to `SettingsScreen`.
+  Clicking a slider sets focus; arrow Left/Right nudge the value by one step (1 for
+  integer sliders, 0.05f for sensitivity). Focus clears on tab switch or any non-arrow key.
+  Focused slider draws a subtle highlight border and a brighter thumb.
+- Fixed conflict row height: `ROW_H + 16` replaced with `ROW_H + theme.lineHeight() + 8`
+  so the warning text never overlaps the next row regardless of font size.
+- Fixed key display names: expanded `KeyBindings.displayName()` switch to cover F1–F12,
+  Home, End, Page Up/Down, Insert, Print Screen, Pause, Caps Lock, Num Lock, Super,
+  and all numpad keys (Num 0–9, Num Enter). Previously these fell through to `"Key N"`.
+- Fixed username overflow: `(session active)` label moved from right of the widget
+  (outside the panel) to below the label text inside the label column. Username row
+  height expands by `lineHeight + 2` when a session is active to accommodate the note.
+- Fixed `wasActionJustPressed` for keyboard bindings: added `Set<Integer> justPressedKeys`
+  to `InputHandler`, populated via `onKeyPressed(int)` from the GLFW key callback
+  (`GLFW_PRESS` only, not repeat). `clearJustPressed()` called at end of each `update()`
+  tick. `wasActionJustPressed()` in `GameLoop` now calls `inputHandler.wasKeyJustPressed()`
+  for keyboard actions instead of returning `false`. Break Block and Place Block now work
+  correctly when rebound to keyboard keys.
+- Fixed resume-click bleeding into block break: added `InputHandler.consumeMouseClick()` —
+  synchronises `lastMouseButtons` to current physical state and clears all just-pressed
+  flags. Called in the Resume callback of `createPauseMenu()`. Without this, the Resume
+  click registered as `mouseButtonJustPressed[0] = true` on the next `update()` tick
+  because `lastMouseButtons` still showed the button as "up" from last frame.
+- Removed `listeningArmed` flag from `SettingsScreen`: the flag required 3 clicks to bind
+  a key via mouse (click to select row, arm flag, click to bind) instead of 2. The extra
+  step was unnecessary — the activating click sets `listeningForAction`, and the next
+  click immediately binds.
+
+### Decisions Made
+- Mouse sensitivity base factor (0.1f) lives at the camera call site, not in `GameSettings`.
+  This keeps the stored value human-readable and means the display in the slider always
+  matches player expectation (1.0 = the feel the game shipped with).
+- `consumeMouseClick()` is the correct pattern for any UI-to-gameplay transition that
+  involves a mouse button. Document it; future screens (inventory, chat) must call it
+  on any "click to dismiss and return to game" path.
+
+### Problems Encountered
+- None. All fixes applied and verified visually.
+
+### AI Assistance Notes
+- Claude diagnosed all six issues and wrote all fixes.
+
+### Lessons / Observations
+- The sensitivity scale bug is a unit mismatch hidden by a lucky default: `0.1` happened
+  to feel correct as a raw multiplier, so nobody noticed the slider was in "raw multiplier
+  units" until the range was changed. Always store human-readable values; apply the
+  hardware-to-human conversion at one call site with a named constant.
+- The resume-click bleed is a classic input edge detection hazard: the UI consumes the
+  press event but the polling-based system sees the transition on the next frame. The
+  fix pattern (`synchronise last-state to current physical state before re-enabling
+  polling`) is reusable anywhere the cursor is recaptured mid-click.
+
+---
+
+## Entry 050 — Phase 6B-7 Complete: Settings System
+**Date:** 25.03.2026
+**Phase:** 6 — Foundation for extensibility (6B)
+
+### What Was Done
+
+#### Step 5 — Live Render Distance
+- Converted `World.RENDER_DISTANCE_H` from `public static final int` to a mutable
+  instance field `renderDistanceH` (default 16). Added `getRenderDistanceH()` and
+  `setRenderDistance(int)` (clamped to [2, 32]).
+- `setRenderDistance()` sets a `volatile boolean pendingUnloadSweep` flag when the
+  distance decreases. `World.update()` checks this flag first and runs an immediate
+  `unloadDistantChunks()` before any other work, then clears the flag. Growing the
+  distance is free — the next `scheduleNeededChunks` tick picks up the new outer ring.
+- All internal uses of the static constant inside `scheduleNeededChunks` and
+  `isInRange()` updated to read `renderDistanceH`.
+- `ServerWorld.isInPlayerRange()` changed from `static` to instance method (needed
+  `world.getRenderDistanceH()`). Added `ServerWorld.setRenderDistance(int)` delegating
+  to `world.setRenderDistance()`. Added `GameServer.setRenderDistance(int)` delegating
+  to `serverWorld.setRenderDistance()`.
+- `GameLoop.applySettings()` calls `activeServer.setRenderDistance(settings.getRenderDistance())`
+  when a session is active.
+
+#### Step 6 — SettingsScreen
+- Created `SettingsScreen.java` in `game/screen/` via structured Copilot prompt.
+  Tabbed layout: Gameplay, Graphics, Display, Controls, Keybinds, Sound.
+  Working-copy pattern: all edits are local; Cancel discards, Save writes back to
+  `GameSettings` and calls `settings.save()` then `onSave.run()`.
+- Tabs (corrected from Copilot output):
+  - Gameplay: Username text field (locked with dim note when session active)
+  - Graphics: Render Distance slider, FOV slider, UI Theme cycle button
+  - Display: VSync toggle, Window Mode cycle button
+  - Controls: Mouse Sensitivity slider
+  - Keybinds: one row per Action; click-to-listen, keyboard or mouse bind,
+    Escape to unbind; conflict detection + warning text; conflict row height grows
+    to fit warning line
+  - Sound: "coming soon" stub
+- Dirty row highlight (blue-tint) when working value differs from saved value.
+- Save/Cancel always-visible bottom bar.
+- Scroll support (`onScroll` → `scrollOffset`); tab switch resets scroll to 0.
+- Added `KeyBindings.copy()` and `KeyBindings.setAll(EnumMap)` used by working-copy
+  save flow. Added `GameSettings.save(Path)` overload.
+- Fixed Copilot bug: `listeningArmed` flag removed — required 3 clicks instead of 2
+  to bind via mouse.
+
+#### Step 7 — Wiring into Menus
+- `MainMenuScreen`: added Settings button (between Multiplayer and Quit); panel height
+  increased to 340; constructor gains `onSettings` parameter.
+- `PauseMenuScreen`: added Settings button (between Resume and Main Menu); panel height
+  increased to 272; constructor gains `onSettings` parameter; button order:
+  Resume → Settings → Main Menu → Quit.
+- `GameLoop`: added `createPauseMenu(long win)` factory method (extracted from
+  `handleEscapeKey` for reuse). Added `openSettings(Runnable onDone)` — constructs
+  `SettingsScreen` and pushes it; `onDone` is called by both Save and Cancel.
+  Added `applySettings()` — applies VSync, FOV, window mode, theme, render distance
+  immediately on the GL thread. Theme swap constructs new `DarkTheme` or `LightTheme`
+  wrapping the existing renderer (zero GL work).
+- From main menu: Settings opens full-screen; Cancel/Save return to main menu.
+- From pause menu: Settings opens full-screen; Cancel/Save return to pause menu.
+  The world continues to run behind the settings screen (no special pause needed —
+  the server keeps ticking, physics are already paused by the screen-active check).
+
+### Decisions Made
+- `pendingUnloadSweep` is `volatile` so `setRenderDistance()` can be called from
+  any thread (e.g. the GL thread via `applySettings()`). The flag is read and cleared
+  only on the server tick thread inside `update()`.
+- Settings screen is full-screen (not overlay) — the world render is skipped while
+  settings are open. This simplifies rendering and avoids confusion about live preview.
+- `createPauseMenu()` extracted as a factory rather than inlining — both
+  `handleEscapeKey` and the Settings → Back path need to push the same configured
+  pause menu. Without the factory, the callback wiring would be duplicated.
+
+### Problems Encountered
+- `isInPlayerRange` in `ServerWorld` was `static` — failed to compile after referencing
+  `world.getRenderDistanceH()`. Fixed by removing `static` from the method signature.
+
+### AI Assistance Notes
+- Claude wrote Steps 5 and 7 entirely. Step 6 delegated to Copilot (GPT-5.3-Codex)
+  via a structured prompt; Claude reviewed and fixed tab assignment errors and the
+  `listeningArmed` bug before wiring.
+- Tab misassignment (mouse sensitivity in Gameplay instead of Controls; VSync in
+  Graphics instead of Display) was a Copilot deviation from the spec. Caught on review.
+
+### Lessons / Observations
+- Copilot followed the architectural constraints (no raw GL, UiTheme only, working-copy
+  pattern) correctly. The errors were in business logic (which setting goes in which tab)
+  not in architecture. A spec table is more reliable than prose for tab-to-setting mapping.
+- The pause-menu factory pattern (`createPauseMenu(win)`) is directly analogous to
+  `createMainMenu()` introduced in 6B-3. Extracting screen factories into GameLoop
+  is the right place for callback wiring — screens stay ignorant of GameLoop internals.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

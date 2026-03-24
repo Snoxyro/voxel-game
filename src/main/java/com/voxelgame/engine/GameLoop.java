@@ -6,6 +6,8 @@ import com.voxelgame.common.world.BlockType;
 import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.RayCaster;
 import com.voxelgame.common.world.RaycastResult;
+import com.voxelgame.engine.ui.DarkTheme;
+import com.voxelgame.engine.ui.LightTheme;
 import com.voxelgame.game.Action;
 import com.voxelgame.game.GameSettings;
 import com.voxelgame.game.KeyBindings;
@@ -14,6 +16,7 @@ import com.voxelgame.game.screen.MainMenuScreen;
 import com.voxelgame.game.screen.MultiplayerConnectScreen;
 import com.voxelgame.game.screen.PauseMenuScreen;
 import com.voxelgame.game.screen.ScreenManager;
+import com.voxelgame.game.screen.SettingsScreen;
 import com.voxelgame.game.screen.WorldSelectScreen;
 import com.voxelgame.server.GameServer;
 
@@ -145,7 +148,80 @@ public class GameLoop {
 
         Runnable onQuit = () -> GLFW.glfwSetWindowShouldClose(window.getWindowHandle(), true);
 
-        return new MainMenuScreen(screenManager, onSingleplayer, onMultiplayer, onQuit);
+        Runnable onSettings = () -> openSettings(() -> screenManager.setScreen(createMainMenu()));
+
+        return new MainMenuScreen(screenManager, onSingleplayer, onMultiplayer, onSettings, onQuit);
+    }
+
+    /**
+     * Creates a configured {@link PauseMenuScreen}.
+     * Extracted as a factory so Settings can return here without duplicating
+     * the callback wiring in handleEscapeKey.
+     *
+     * @param win the GLFW window handle — needed for cursor mode changes
+     */
+    private PauseMenuScreen createPauseMenu(long win) {
+        return new PauseMenuScreen(
+            screenManager,
+            // Resume — recapture cursor and resume gameplay
+            () -> {
+                cursorCaptured = true;
+                GLFW.glfwSetInputMode(win, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+                inputHandler.resetMouseDelta();
+                inputHandler.consumeMouseClick(); // prevent the resume click from breaking a block
+            },
+            // Settings — open settings screen; returning goes back to pause menu
+            () -> openSettings(() -> screenManager.setScreen(createPauseMenu(win))),
+            // Main Menu — disconnect and return to menu
+            this::returnToMainMenu,
+            // Quit
+            () -> GLFW.glfwSetWindowShouldClose(win, true)
+        );
+    }
+
+    /**
+     * Opens the settings screen. When the player saves or cancels, {@code onDone}
+     * is called to return to the appropriate previous screen.
+     *
+     * @param onDone called after save or cancel; should restore the previous screen
+     */
+    private void openSettings(Runnable onDone) {
+        screenManager.setScreen(new SettingsScreen(
+            settings,
+            isSessionActive(),
+            () -> { applySettings(); onDone.run(); },  // Save: apply then return
+            onDone                                      // Cancel: just return
+        ));
+    }
+
+    /**
+     * Applies all settings that take effect immediately after saving.
+     * Called on the GL thread immediately after the player hits Save.
+     *
+     * <p>Not all settings are live — username takes effect on the next connection.
+     * Only settings marked "Live? Yes" in the settings design table are applied here.
+     */
+    public void applySettings() {
+        // VSync — changes the swap interval immediately
+        GLFW.glfwSwapInterval(settings.isVsync() ? 1 : 0);
+
+        // FOV — updates the projection matrix on the next render
+        camera.setFov(settings.getFov());
+
+        // Window mode — repositions or fullscreens the OS window
+        applyWindowMode(settings.getWindowMode());
+
+        // Theme — hot-swap the active theme; zero GL work, takes effect next frame
+        String themeName = settings.getTheme();
+        com.voxelgame.engine.ui.UiRenderer renderer = screenManager.getTheme().renderer();
+        screenManager.setTheme("light".equalsIgnoreCase(themeName)
+            ? new LightTheme(renderer)
+            : new DarkTheme(renderer));
+
+        // Render distance — push to the server world if a session is active
+        if (activeServer != null) {
+            activeServer.setRenderDistance(settings.getRenderDistance());
+        }
     }
 
     /**
@@ -352,6 +428,7 @@ public class GameLoop {
         // still uses InputHandler polling (isKeyDown, wasMouseLeftClicked, etc.)
         keyCallback = GLFWKeyCallback.create((win, key, scancode, action, mods) -> {
             if (action == GLFW.GLFW_PRESS) {
+                inputHandler.onKeyPressed(key);
                 // Escape handled separately — only on press, never on repeat
                 handleEscapeKey(win, key);
             }
@@ -510,13 +587,7 @@ public class GameLoop {
         if (KeyBindings.isMouse(code)) {
             return inputHandler.wasMouseButtonJustPressed(KeyBindings.rawMouseButton(code));
         }
-        // Keyboard — use GLFW directly for edge detection since InputHandler
-        // only exposes isKeyDown (held), not just-pressed for arbitrary keys.
-        // We track this ourselves with a small set if needed; for now keyboard
-        // actions that need edge detection use a lastKeyDown field per action.
-        // Movement keys only need isKeyDown so this path is currently only
-        // needed for TOGGLE_FREECAM — which already has lastFKeyDown handling below.
-        return false;
+        return inputHandler.wasKeyJustPressed(code);  // was: return false
     }
 
     /**
@@ -555,7 +626,7 @@ public class GameLoop {
 
         // --- Mouse look ---
         if (cursorCaptured) {
-            float sens  = settings.getMouseSensitivity();
+            float sens  = settings.getMouseSensitivity() * 0.1f; // scale down to a sensible range (So default 1.0f becomes 0.1f)
             float yaw   = camera.getYaw()   + inputHandler.getMouseDeltaX() * sens;
             float pitch = camera.getPitch() - inputHandler.getMouseDeltaY() * sens;
             camera.setYaw(yaw);
@@ -643,6 +714,8 @@ public class GameLoop {
                 }
             }
         }
+
+        inputHandler.clearJustPressed();
     }
 
     /**
@@ -698,19 +771,7 @@ public class GameLoop {
             // Open pause menu and release cursor
             cursorCaptured = false;
             GLFW.glfwSetInputMode(win, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
-            screenManager.setScreen(new PauseMenuScreen(
-                screenManager,
-                // Resume
-                () -> {
-                    cursorCaptured = true;
-                    GLFW.glfwSetInputMode(win, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
-                    inputHandler.resetMouseDelta();
-                },
-                // Main Menu
-                this::returnToMainMenu,
-                // Quit
-                () -> GLFW.glfwSetWindowShouldClose(win, true)
-            ));
+            screenManager.setScreen(createPauseMenu(win));
         } else {
             // Cursor is free (shouldn't normally happen in-game, but recapture it)
             cursorCaptured = true;
