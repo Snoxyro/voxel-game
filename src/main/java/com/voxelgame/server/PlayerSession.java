@@ -202,4 +202,13 @@ public final class PlayerSession {
     public void removeVisiblePlayer(int playerId) {
         visiblePlayerIds.remove(playerId);
     }
+
+    /**
+    * Gets the Netty channel for this session.
+    *
+    * @return the channel
+    */
+    public Channel getChannel() {
+        return channel;
+    }
 }

@@ -30,9 +30,14 @@ public final class SettingsScreen implements Screen {
 
     private static final int SCROLL_STEP = 24;
 
+    private static final float BRIGHTNESS_MIN = 0.0f;
+    private static final float BRIGHTNESS_MAX = 0.3f;
+    private static final float BRIGHTNESS_NUDGE_STEP = 0.01f;
+
     private static final int SLIDER_RENDER_DISTANCE = 0;
     private static final int SLIDER_FOV = 1;
-    private static final int SLIDER_MOUSE_SENS = 2;
+    private static final int SLIDER_BRIGHTNESS = 2;
+    private static final int SLIDER_MOUSE_SENS = 3;
 
     private final GameSettings settings;
     private final boolean sessionActive;
@@ -44,6 +49,8 @@ public final class SettingsScreen implements Screen {
     private String workUsername;
     private int workRenderDistance;
     private int workFov;
+    private float workingBrightnessFloor;
+    private boolean workingAoEnabled;
     private float workMouseSens;
     private String workTheme;
     private boolean workVsync;
@@ -62,6 +69,7 @@ public final class SettingsScreen implements Screen {
 
     private boolean sliderDragging;
     private int draggingSlider = -1;
+    private int lastDragMouseX;
     private int focusedSlider = -1;  // -1 = none; uses SLIDER_* constants
 
     private Action listeningForAction;
@@ -78,6 +86,9 @@ public final class SettingsScreen implements Screen {
     private Rect usernameFieldRect = Rect.EMPTY;
     private Rect renderDistanceSliderRect = Rect.EMPTY;
     private Rect fovSliderRect = Rect.EMPTY;
+    private Rect brightnessSliderRect = Rect.EMPTY;
+    private Rect aoRowRect = Rect.EMPTY;
+    private Rect aoButtonRect = Rect.EMPTY;
     private Rect mouseSensSliderRect = Rect.EMPTY;
     private Rect vsyncButtonRect = Rect.EMPTY;
     private Rect themeButtonRect = Rect.EMPTY;
@@ -96,6 +107,8 @@ public final class SettingsScreen implements Screen {
         this.workUsername = settings.getUsername();
         this.workRenderDistance = settings.getRenderDistance();
         this.workFov = settings.getFov();
+        this.workingBrightnessFloor = settings.getBrightnessFloor();
+        this.workingAoEnabled = settings.isAoEnabled();
         this.workMouseSens = settings.getMouseSensitivity();
         this.workTheme = normalizeTheme(settings.getTheme());
         this.workVsync = settings.isVsync();
@@ -261,6 +274,11 @@ public final class SettingsScreen implements Screen {
                         workRenderDistance = clampInt(workRenderDistance + (int) delta, 2, 32);
                     case SLIDER_FOV ->
                         workFov = clampInt(workFov + (int) delta, 50, 110);
+                    case SLIDER_BRIGHTNESS ->
+                        workingBrightnessFloor = clampFloat(
+                            workingBrightnessFloor + delta * BRIGHTNESS_NUDGE_STEP,
+                            BRIGHTNESS_MIN,
+                            BRIGHTNESS_MAX);
                     case SLIDER_MOUSE_SENS ->
                         workMouseSens = clampFloat(workMouseSens + delta * 0.05f, 0.1f, 2.0f);
                 }
@@ -376,6 +394,24 @@ public final class SettingsScreen implements Screen {
         drawRowLabel(theme, x, rowY, w, "Field of View");
         fovSliderRect = rowWidgetRect(x, rowY, w, ROW_H);
         drawSlider(theme, fovSliderRect, workFov, 50f, 110f, workFov + "°", focusedSlider == SLIDER_FOV);
+        rowY += ROW_H + ROW_GAP;
+
+        boolean brightnessDirty = workingBrightnessFloor != settings.getBrightnessFloor();
+        drawRow(theme, x, rowY, w, ROW_H, brightnessDirty ? 0x5FA8FF33 : 0x00000000);
+        drawRowLabel(theme, x, rowY, w, "Brightness");
+        brightnessSliderRect = rowWidgetRect(x, rowY, w, ROW_H);
+        int brightnessPercent = Math.round(workingBrightnessFloor / BRIGHTNESS_MAX * 100.0f);
+        drawSlider(theme, brightnessSliderRect, workingBrightnessFloor, BRIGHTNESS_MIN, BRIGHTNESS_MAX,
+            brightnessPercent + "%", focusedSlider == SLIDER_BRIGHTNESS);
+        rowY += ROW_H + ROW_GAP;
+
+        boolean aoDirty = workingAoEnabled != settings.isAoEnabled();
+        drawRow(theme, x, rowY, w, ROW_H, aoDirty ? 0x5FA8FF33 : 0x00000000);
+        drawRowLabel(theme, x, rowY, w, "Ambient Occlusion");
+        aoRowRect = new Rect(x, rowY, w, ROW_H);
+        aoButtonRect = rowWidgetRect(x, rowY, w, ROW_H);
+        theme.drawButton(aoButtonRect.x, aoButtonRect.y, aoButtonRect.w, aoButtonRect.h,
+            workingAoEnabled ? "ON" : "OFF", aoButtonRect.hits(mouseX, mouseY));
         rowY += ROW_H + ROW_GAP;
 
         boolean themeDirty = !normalizeTheme(settings.getTheme()).equals(workTheme);
@@ -532,7 +568,16 @@ public final class SettingsScreen implements Screen {
             startSliderDrag(SLIDER_FOV);
             return;
         }
+        if (brightnessSliderRect.hits(x, y)) {
+            focusedSlider = SLIDER_BRIGHTNESS;
+            startSliderDrag(SLIDER_BRIGHTNESS);
+            return;
+        }
         focusedSlider = -1;
+        if (aoRowRect.hits(x, y)) {
+            workingAoEnabled = !workingAoEnabled;
+            return;
+        }
         if (themeButtonRect.hits(x, y)) {
             workTheme = "dark".equals(workTheme) ? "light" : "dark";
         }
@@ -649,6 +694,7 @@ public final class SettingsScreen implements Screen {
     private void startSliderDrag(int sliderIndex) {
         sliderDragging = true;
         draggingSlider = sliderIndex;
+        lastDragMouseX = mouseX;
         updateDraggingSlider();
     }
 
@@ -672,18 +718,34 @@ public final class SettingsScreen implements Screen {
                     workMouseSens = clampFloat(workMouseSens, 0.1f, 2.0f);
                 }
             }
+            case SLIDER_BRIGHTNESS -> {
+                if (brightnessSliderRect != null) {
+                    int sliderWidth = sliderTrackWidth(brightnessSliderRect, "100%");
+                    int dragDelta = mouseX - lastDragMouseX;
+                    lastDragMouseX = mouseX;
+                    float adjustment = (dragDelta / (float) sliderWidth) * BRIGHTNESS_MAX;
+                    workingBrightnessFloor = clampFloat(
+                        workingBrightnessFloor + adjustment,
+                        BRIGHTNESS_MIN,
+                        BRIGHTNESS_MAX);
+                }
+            }
             default -> {
                 // no-op
             }
         }
     }
 
+    private int sliderTrackWidth(Rect area, String maxValueText) {
+        int valueW = Math.max(36, 8 + maxValueText.length() * estimateCharWidth());
+        return Math.max(10, area.w - valueW - 12);
+    }
+
     private float sliderValueFromMouse(Rect area, float min, float max) {
         String maxText = (max == 2.0f)
             ? String.format(java.util.Locale.ROOT, "%.2f", max)
             : String.valueOf((int) max);
-        int valueW = Math.max(36, 8 + maxText.length() * estimateCharWidth());
-        int trackW = Math.max(10, area.w - valueW - 12);
+        int trackW = sliderTrackWidth(area, maxText);
         float t = clampFloat((mouseX - area.x) / (float) trackW, 0f, 1f);
         return min + t * (max - min);
     }
@@ -716,6 +778,8 @@ public final class SettingsScreen implements Screen {
         settings.setUsername(workUsername);
         settings.setRenderDistance(workRenderDistance);
         settings.setFov(workFov);
+        settings.setBrightnessFloor(workingBrightnessFloor);
+        settings.setAoEnabled(workingAoEnabled);
         settings.setMouseSensitivity(workMouseSens);
         settings.setTheme(workTheme);
         settings.setVsync(workVsync);
@@ -737,6 +801,9 @@ public final class SettingsScreen implements Screen {
         usernameFieldRect = Rect.EMPTY;
         renderDistanceSliderRect = Rect.EMPTY;
         fovSliderRect = Rect.EMPTY;
+        brightnessSliderRect = Rect.EMPTY;
+        aoRowRect = Rect.EMPTY;
+        aoButtonRect = Rect.EMPTY;
         mouseSensSliderRect = Rect.EMPTY;
         vsyncButtonRect = Rect.EMPTY;
         themeButtonRect = Rect.EMPTY;

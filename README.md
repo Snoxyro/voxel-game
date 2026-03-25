@@ -65,26 +65,26 @@ hands control back to the GL thread.
 ```
 com.voxelgame.
 ├── Main.java                  ← minimal bootstrap: registries + GameLoop
-├── common/                    ← shared types: Block, BlockView, Chunk, network packets
+├── common/                    ← shared types: BlockType, Chunk, WorldTime, network packets
 ├── server/                    ← headless server — zero GL/LWJGL dependency
-│   ├── GameServer.java        ← 20 TPS game loop; setRenderDistance()
+│   ├── GameServer.java        ← 20 TPS game loop; WorldTime tick + broadcast; setRenderDistance()
 │   ├── PlayerSession.java     ← per-client state: position, yaw/pitch, loaded chunks, visible players
-│   ├── ServerWorld.java       ← per-player chunk streaming + dynamic player visibility
+│   ├── ServerWorld.java       ← per-player chunk streaming + dynamic player visibility; broadcastToAll()
 │   └── storage/               ← FlatFileChunkStorage, WorldMeta (seed persistence)
 ├── client/
-│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders; reset()
+│   ├── ClientWorld.java       ← receives chunks, meshes + renders; WorldTime reads; reset()
 │   └── network/
 ├── engine/                    ← GL/GLFW systems — main thread only
 │   ├── ui/                    ← GlyphAtlas, UiShader, UiRenderer (batched 2D quads)
 │   │                             UiTheme (abstract), DarkTheme, LightTheme
-│   └── GameLoop, Camera (setFov), Window, InputHandler (consumeMouseClick), ...
+│   └── GameLoop, Camera (setFov), Window, InputHandler, ShaderProgram, Mesh, ...
 └── game/
     ├── screen/                ← Screen, ScreenManager, MainMenu, WorldSelect, PauseMenu,
-    │                             MultiplayerConnectScreen, SettingsScreen
+    │                            MultiplayerConnectScreen, SettingsScreen
     ├── Action.java            ← enum of all bindable actions
     ├── KeyBindings.java       ← EnumMap<Action,Integer>; mouse offset encoding
-    ├── GameSettings.java      ← persistent settings; load/save; WindowMode enum
-    └── World (multi-viewer streaming; live renderDistanceH), TerrainGenerator, ChunkMesher, Player
+    ├── GameSettings.java      ← persistent settings; brightnessFloor, aoEnabled, load/save
+    └── World, TerrainGenerator, ChunkMesher (aoEnabled volatile), Player
 ```
 
 ### Network Protocol
@@ -153,12 +153,24 @@ decisions, and lessons learned — including honest notes on AI assistance.
     - [x] 6B-5 — Multiplayer connect screen (IP/port input, direct server connect)
     - [x] 6B-6 — In-game pause menu (overlay, Resume / Settings / Main Menu / Quit)
     - [x] 6B-theme — UI Theme system (UiTheme, DarkTheme, LightTheme)
-    - [x] Multiplayer bug fixes (chunk load order, block-in-hitbox, per-player streaming, player visibility)
+    - [x] Multiplayer bug fixes (chunk load order, block-in-hitbox, per-player streaming, visibility)
     - [x] 6B-7 — Full settings system (GameSettings, KeyBindings, Action, SettingsScreen)
-  - [ ] 6C — Lighting + Day/Night Cycle (foundation done, brightness/day-night remaining)
-  - [ ] 6D — Entity System + Player Model (nametags deferred to here)
+  - [x] 6C — Lighting + Day/Night Cycle
+    - [x] 6C-1 — Light data storage (lightData nibble array in Chunk, lightEmission in BlockType)
+    - [x] 6C-2 — LightEngine (column skylight, block light seeding)
+    - [x] 6C-3 — Mesher + shader integration (vertex brightness, u_brightnessFloor)
+    - [x] 6C-4 — Brightness slider in settings
+    - [x] 6C-5 — AO toggle in settings (async full remesh on change)
+    - [x] 6C-6 — Day/night cycle (WorldTime, u_ambientFactor, sky color, WorldTimePacket)
+    - [x] 6C-7 — Skylight recompute on block place/break (automatic via existing pipeline)
+  - [ ] 6D — Entity System + Player Model
   - [ ] 6E — Items + Inventory
-- [ ] Phase 7 — Modding API
+- [ ] Phase 7 — BFS Light Propagation
+  - [ ] Queue-based flood fill across chunk boundaries (skylight + block light)
+  - [ ] Correct gradients under overhangs and into caves
+  - [ ] Torch-style point light sources
+  - [ ] Incremental updates on block place/break (not full recompute)
+- [ ] Phase 8 — Modding API
   - [ ] Block / item / entity registry hooks exposed to external code
   - [ ] World gen hooks, event listeners
   - [ ] Scripting runtime

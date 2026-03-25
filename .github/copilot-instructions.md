@@ -119,7 +119,7 @@ for the world-launch background thread to post GL-thread work.
 - All OpenGL resources explicitly cleaned up in `cleanup()` methods
 
 ## Current Development Phase
-Phase 6 — Foundation for extensibility. Phase 6B complete. Next: 6C Lighting.
+Phase 6 — Foundation for extensibility. 6A, 6B, and 6C complete. Next: 6D Entity System.
 
 ### Phase 6 status
 - 6A done: Block Registry
@@ -130,16 +130,21 @@ Phase 6 — Foundation for extensibility. Phase 6B complete. Next: 6C Lighting.
   - SettingsScreen — tabbed UI (Gameplay/Graphics/Display/Controls/Keybinds/Sound)
   - Live render distance, live FOV/VSync/theme/window mode on save
   - Multiplayer bugs fixed: chunk load order, block-in-hitbox, per-player streaming, visibility
-- 6C (in progress): Lighting + Day/Night Cycle
-  - 6C-1/2/3 (done): LightEngine, vertex light baking, shader integration
-  - 6C-4 (next): Brightness slider + AO toggle settings
-  - 6C-5: Day/night cycle (WorldTime, ambientFactor uniform, server packet)
-  - 6C-6: Skylight recompute on block place/break
+- 6C done: Lighting + Day/Night Cycle
+  - LightEngine: column skylight, block light emission seeding
+  - Vertex brightness baking in ChunkMesher (pow(0.8, 15-level) gamma curve)
+  - u_brightnessFloor uniform (brightness slider), u_ambientFactor uniform (day/night)
+  - AO toggle (ChunkMesher.aoEnabled volatile, async remesh on change)
+  - WorldTime (common/world/): tick(), getAmbientFactor(), getSkyColor(); volatile worldTick
+  - WorldTimePacket (0x18): server broadcasts every 20 ticks; client applies via applyWorldTime()
+  - Dynamic glClearColor from WorldTime.getSkyColor() each frame
+  - Skylight recompute on block change: automatic via existing dirty-mark pipeline
+- 6D (next): Entity System + Player Model
 
-### After 6C:
-- 6D: Entity System + Player Model (nametags deferred to here)
+### After 6D:
 - 6E: Items + Inventory
-- Phase 7: Modding API
+- Phase 7: BFS Light Propagation (flood fill, torches, correct gradients)
+- Phase 8: Modding API
 
 ## Key Constraints
 - Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`

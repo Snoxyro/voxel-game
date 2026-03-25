@@ -31,20 +31,21 @@ src/main/java/com/voxelgame/
 ├── Main.java                  ← singleplayer: minimal bootstrap only (server lifecycle in GameLoop)
 ├── common/
 │   ├── world/                 ← shared data types used by both server and client
-│   │   ├── Block.java
-│   │   ├── BlockType.java     ← registered block type (replaces Block enum)
+│   │   ├── BlockType.java     ← registered block type (replaces Block enum); lightEmission field
 │   │   ├── BlockRegistry.java ← static registry: register(), getById(), getByName()
 │   │   ├── Blocks.java        ← well-known block constants: AIR, GRASS, DIRT, STONE
 │   │   ├── TextureLayers.java ← texture layer index constants (moved out of engine/)
 │   │   ├── BlockView.java     ← interface: getBlock(x,y,z) — implemented by World and ClientWorld
-│   │   ├── Chunk.java
+│   │   ├── Chunk.java         ← short[] blocks + byte[] lightData (packed nibbles: high=sky, low=block)
 │   │   ├── ChunkPos.java
+│   │   ├── WorldTime.java     ← day/night math: tick(), getAmbientFactor(), getSkyColor(); volatile worldTick
+│   │   ├── LightEngine.java   ← static: computeChunkLight(chunk, pos, neighbors); column skylight + emission seed
 │   │   ├── PhysicsBody.java
 │   │   ├── RayCaster.java
 │   │   └── RaycastResult.java
 │   └── network/               ← wire protocol: packets, encoder, decoder (shared by client+server)
 │       ├── Packet.java
-│       ├── PacketId.java
+│       ├── PacketId.java      ← WORLD_TIME = 0x18 (clientbound)
 │       ├── PacketEncoder.java
 │       ├── PacketDecoder.java
 │       └── packets/
@@ -59,57 +60,61 @@ src/main/java/com/voxelgame/
 │           ├── PlayerMoveSBPacket.java
 │           ├── PlayerMoveCBPacket.java
 │           ├── PlayerSpawnPacket.java
-│           └── PlayerDespawnPacket.java
+│           ├── PlayerDespawnPacket.java
+│           └── WorldTimePacket.java   ← long worldTick; broadcast every 20 ticks
 ├── server/                    ← headless server: no GL, no LWJGL, no engine imports
 │   ├── ServerMain.java        ← dedicated server entry point (./gradlew runServer)
-│   ├── GameServer.java        ← 20 TPS game loop, player login/disconnect callbacks; setRenderDistance()
-│   ├── PlayerSession.java     ← per-client state: channel, position, yaw/pitch, loaded chunks, visible players
-│   ├── ServerWorld.java       ← wraps World, drives chunk streaming + player visibility per player
+│   ├── GameServer.java        ← 20 TPS game loop; WorldTime tick + broadcast; setRenderDistance()
+│   ├── PlayerSession.java     ← per-client state: channel (getChannel()), position, loaded chunks, visible players
+│   ├── ServerWorld.java       ← wraps World; chunk streaming; player visibility; broadcastToAll(Packet)
 │   ├── network/
 │   │   ├── ServerNetworkManager.java
 │   │   └── ClientHandler.java
 │   └── storage/
-│       ├── ChunkStorage.java  ← interface: load/save chunks
+│       ├── ChunkStorage.java
 │       ├── FlatFileChunkStorage.java
 │       └── WorldMeta.java     ← reads/writes world.dat (seed); loadOrCreate(Path) and loadOrCreate(Path, long)
 ├── client/                    ← client-side: rendering, input, local world state
-│   ├── ClientWorld.java       ← receives chunks from server, meshes + renders; reset() for menu return
+│   ├── ClientWorld.java       ← receives chunks; meshes + renders; WorldTime (applyWorldTime, getAmbientFactor,
+│   │                             getSkyColor); invalidateAllMeshes(); reset() for menu return
 │   └── network/
 │       ├── ClientNetworkManager.java
-│       └── ServerHandler.java
+│       └── ServerHandler.java ← routes WorldTimePacket → clientWorld.applyWorldTime()
 ├── engine/                    ← GL/GLFW systems — client-only, never server
 │   ├── ui/                    ← UI rendering subsystem
 │   │   ├── GlyphAtlas.java    ← AWT font baked to GL_TEXTURE_2D; measureText(), charWidth(), lineHeight()
 │   │   ├── UiShader.java      ← orthographic 2D shader wrapper
 │   │   ├── UiRenderer.java    ← batched quad renderer; int-color + float-color overloads for drawRect/drawText
-│   │   ├── UiTheme.java       ← abstract base: named color fields + compound draw helpers (drawButton, drawPanel, etc.)
+│   │   ├── UiTheme.java       ← abstract base: named color fields + compound draw helpers
 │   │   ├── DarkTheme.java     ← default built-in dark theme
 │   │   └── LightTheme.java    ← built-in light theme
 │   ├── GameLoop.java          ← main loop; owns ScreenManager, settings; launchWorld(), returnToMainMenu(),
 │   │                             openSettings(), applySettings(), createPauseMenu(), isSessionActive()
+│   │                             render(): dynamic glClearColor from WorldTime; u_brightnessFloor +
+│   │                             u_ambientFactor uniforms set each frame
 │   ├── Camera.java            ← setFov(int degrees) — mutable FOV driven by GameSettings
 │   ├── Window.java
 │   ├── InputHandler.java      ← resetMouseDelta(), consumeMouseClick(), justPressedKeys edge detection
-│   ├── ShaderProgram.java
-│   ├── Mesh.java
+│   ├── ShaderProgram.java     ← setUniform overloads: Matrix4f, float, int, boolean
+│   ├── Mesh.java              ← FLOATS_PER_VERTEX = 10 (pos3 + col3 + uv2 + layer1 + light1)
 │   ├── TextureManager.java
 │   ├── HudRenderer.java
 │   └── BlockHighlightRenderer.java
-├── game/                      ← server-side gameplay logic + client-only data types
-│   ├── screen/                ← Screen system
-│   │   ├── Screen.java                ← interface: render(UiTheme,float,w,h), onShow/Hide, input; isOverlay() default false
-│   │   ├── ScreenManager.java         ← owns UiTheme (swappable); setTheme(), getTheme(), renderActiveScreen()
-│   │   ├── MainMenuScreen.java        ← Singleplayer / Multiplayer / Settings / Quit
-│   │   ├── WorldSelectScreen.java     ← world list, create, delete, launch; statusMessage for launch errors
-│   │   ├── PauseMenuScreen.java       ← overlay; Resume / Settings / Main Menu / Quit
-│   │   ├── MultiplayerConnectScreen.java ← IP+port input, direct connect, cancelledFlag abort pattern
-│   │   └── SettingsScreen.java        ← full tabbed settings: Gameplay/Graphics/Display/Controls/Keybinds/Sound
-│   ├── Action.java            ← enum of all bindable actions with displayName
-│   ├── KeyBindings.java       ← EnumMap<Action,Integer>; mouse offset encoding; displayName(int); copy/setAll
-│   ├── GameSettings.java      ← persistent settings (settings.properties); load/save atomic; WindowMode enum
-│   ├── World.java             ← chunk data management; renderDistanceH mutable via setRenderDistance()
+├── game/                      ← gameplay logic + client-only data types
+│   ├── screen/
+│   │   ├── Screen.java
+│   │   ├── ScreenManager.java
+│   │   ├── MainMenuScreen.java
+│   │   ├── WorldSelectScreen.java
+│   │   ├── PauseMenuScreen.java
+│   │   ├── MultiplayerConnectScreen.java
+│   │   └── SettingsScreen.java   ← Graphics tab: RenderDist, FOV, Brightness, AO toggle, Theme
+│   ├── Action.java
+│   ├── KeyBindings.java
+│   ├── GameSettings.java      ← fields: brightnessFloor [0.0,0.3], aoEnabled bool; all persisted
+│   ├── World.java
 │   ├── TerrainGenerator.java
-│   ├── ChunkMesher.java
+│   ├── ChunkMesher.java       ← public static volatile boolean aoEnabled; computeAO() respects it
 │   ├── Player.java
 │   └── ChunkStorage.java
 └── util/
@@ -117,9 +122,10 @@ src/main/java/com/voxelgame/
 
 src/main/resources/
 ├── shaders/
-│   ├── default.vert / default.frag   ← 3D world shader
-│   ├── hud.vert / hud.frag           ← HUD crosshair shader
-│   └── ui.vert / ui.frag             ← orthographic 2D UI shader
+│   ├── default.vert           ← layout locations 0-4: pos, col, uv, layer, lightLevel
+│   ├── default.frag           ← uniforms: texArray, useTexture, u_brightnessFloor, u_ambientFactor
+│   ├── hud.vert / hud.frag
+│   └── ui.vert / ui.frag
 ├── textures/
 └── sounds/
 ```
@@ -136,88 +142,82 @@ loading screen. `returnToMainMenu()` disconnects, stops the server, calls
 code path. Ever.
 
 ### 2. Server Is Fully Headless
-The `server/` package has **zero imports from `engine/`**. No `Mesh`, no `ShaderProgram`,
-no `GL11`, no LWJGL. The server thread has no OpenGL context — any GL call from it
-causes a native crash (`EXCEPTION_ACCESS_VIOLATION`). This is a hard rule.
+The `server/` package has **zero imports from `engine/`**. Any violation is always
+a bug and will crash natively on the server thread with no useful Java stack trace.
 
-### 3. BlockView Interface
-`PhysicsBody`, `RayCaster`, and `Player` depend on `BlockView` (not `World` or
-`ClientWorld` directly). This lets physics and raycasting run identically on both
-client and server without any code duplication.
+### 3. GL Thread Rules
+- GL calls on the main thread only — never on worker threads or Netty I/O threads.
+- `new Mesh(vertices)` (GPU buffer allocation) on the main thread only.
+- Chunk mesh generation (CPU side) runs on worker threads via `meshExecutor`.
+- Netty I/O threads only write to `ConcurrentLinkedQueue` instances — never touch
+  GL resources or chunk maps directly.
 
-### 4. GL Thread Rule
-All OpenGL calls on the main thread only. `ClientWorld` runs `ChunkMesher.mesh()`
-on worker threads (CPU work) but calls `new Mesh(vertices)` only on the main thread
-(GL work). Worker threads never touch GL.
+### 4. Chunk Mesh Pipeline
+1. Block change / chunk arrival → dirty-mark chunk + face neighbors
+2. `processDirtyMeshes()` (main thread) → captures neighbor snapshot → submits to `meshExecutor`
+3. Worker thread: `LightEngine.computeChunkLight()` → `ChunkMesher.mesh()` → result queued
+4. Main thread drains results → `new Mesh(vertices)` → stored in `meshes` map
 
-### 5. Network Protocol
-Custom binary TCP via Netty. Wire format: `[4-byte length][1-byte packet ID][payload]`.
-`LengthFieldBasedFrameDecoder` handles TCP reassembly. `TCP_NODELAY` on all channels.
-Default port: **24463**.
+### 5. Block Registry
+`BlockRegistry` is a static registry with append-only registration order.
+ID 0 = AIR is a permanent contract — `Chunk` zero-initialises its `short[]` to AIR.
+`Blocks.bootstrap()` must be the first line of both `main()` entry points.
+Never reorder existing registrations — it corrupts save files and in-flight packets.
 
-### 6. OpenGL 4.5, Vulkan Later
-Renderer abstracted behind interfaces. Vulkan backend is a future option, not current work.
+### 6. Light System
+`Chunk` stores `byte[] lightData` — 4096 bytes, packed nibbles (high = skylight 0–15,
+low = block light 0–15). `LightEngine.computeChunkLight()` runs column-only skylight
+(top-down, checks chunk above for sky entry) and seeds block light from
+`BlockType.getLightEmission()`. No BFS propagation yet — deferred to Phase 7.
+Data layout is fully BFS-compatible; only the propagation algorithm changes.
+`ChunkMesher` reads face light via `getLightForFace()` and bakes `pow(0.8, 15-level)`
+as a float into vertex slot 4. The fragment shader applies `u_brightnessFloor`
+(additive floor, settings-driven) and `u_ambientFactor` (multiplicative, day/night).
 
-### 7. ECS Architecture (Target)
-Entities use composition, not deep inheritance. `PhysicsBody` is already a reusable
-component owned by `Player` — the pattern to follow.
+### 7. Day/Night Cycle
+`WorldTime` lives in `common/world/`. Server owns one instance, ticks it every server
+tick, broadcasts `WorldTimePacket` every 20 ticks (1 real second). Client's
+`ClientWorld` owns a read-only instance updated via `applyWorldTime(long)` from
+`ServerHandler`. `worldTick` is `volatile` — Netty thread writes, GL thread reads.
+`GameLoop.render()` calls `glClearColor` from `getSkyColor()` and sets
+`u_ambientFactor` from `getAmbientFactor()` every frame. Day = 24,000 ticks = 20
+real minutes. Noon = tick 6000, midnight = 18000.
 
-### 8. Multithreading Model
-- Server: Netty I/O threads ↔ concurrent queues ↔ 20 TPS server tick thread
-- Client: Netty I/O thread → `ClientWorld` queues → main GL thread (mesh upload)
-- Chunk meshing: worker thread pool (availableProcessors - 1), snapshot isolation
-- World launch: dedicated daemon thread blocks on `awaitReady()` + `network.connect()`,
-  then posts a `Runnable` to `pendingMainThreadAction` (AtomicReference) for the GL thread
-- Rule: never pass live mutable state between threads; always snapshot first
-
-### 9. Screen System
-- `Screen` interface: `render(UiTheme, float deltaTime, int w, int h)`, `onShow/Hide()`, input callbacks, `isOverlay()` (default false)
-- Full-screen menus (main menu, world select, settings): replace world render entirely
-- Overlay screens (pause menu): world renders first, screen draws on top
-- `ScreenManager` owns `UiRenderer`, `GlyphAtlas`, `UiShader` — shared across all screens
-- Button centering always uses `r.measureText(label)` — never hardcoded character widths
-- `isOverlay()` flag controls whether `GameLoop.loop()` skips or keeps the world render
-
-### 10. UI Theme System
-`UiTheme` is an abstract class in `engine/ui/`. Subclasses set `protected int col*`
-fields (packed `0xRRGGBBAA`) and optionally override draw helpers. `ScreenManager`
-owns the active theme and exposes `setTheme(UiTheme)` — swapping themes requires no
-GL work. `ThemeRegistry` is deferred to Phase 7. All screens depend on `UiTheme`,
-never on `UiRenderer` directly. `Screen.render()` receives `UiTheme`, not `UiRenderer`.
-
-### 11. Multi-Viewer Chunk Streaming
-`World.update()` accepts `List<World.ViewerInfo>` — one entry per connected player.
-Each `ViewerInfo` carries position and normalised look direction. Chunks are loaded
-if in range of ANY viewer and unloaded only when out of range of ALL viewers.
-`ServerWorld` builds the viewer list from all connected players each tick.
-
-### 12. Per-Player Visibility (Player Models)
-`PlayerSession` tracks which remote player IDs each session has been told about via
-a `visiblePlayerIds` set. `ServerWorld` manages spawn/despawn dynamically each tick:
-when two players enter each other's render distance a `PlayerSpawnPacket` is sent;
-when they move out of range a `PlayerDespawnPacket` is sent. Position updates
-(`PlayerMoveCBPacket`) are only sent while visibility is active.
-
-### 13. GL Resource Construction Timing
-Any class instantiated before `GameLoop.init()` must not create GL resources in its
-constructor or field initializers. The pattern is: nullable field + separate
-`initRenderResources()` method called from `GameLoop.init()` after `window.init()`.
-This has caused two crashes in the project history — it is a hard rule.
-
-### 14. Settings System
+### 8. Settings System
 `GameSettings` is owned by `GameLoop` and passed via constructor injection. Never a
-static singleton — Phase 7 mod settings will use separate `GameSettings` instances
-pointing to different `.properties` files. `KeyBindings` (in `game/`) wraps an
-`EnumMap<Action, Integer>` where mouse buttons are offset by `MOUSE_BUTTON_OFFSET=1000`
-to avoid colliding with key codes. `World.renderDistanceH` is a mutable instance field
-(not a compile-time constant) driven by `GameSettings` — `setRenderDistance()` sets a
-`pendingUnloadSweep` flag so the unload happens on the next server tick.
-`GameLoop.applySettings()` applies all live-applicable settings immediately on save:
-VSync, FOV, window mode, theme, render distance. Mouse sensitivity is stored as a
-human-readable multiplier (1.0 = normal feel) and multiplied by a base factor of
-`0.1f` when applied to camera rotation. `InputHandler.consumeMouseClick()` must be
-called after any UI click that transitions back to gameplay to prevent the click from
-bleeding into game input (e.g. the Resume button breaking a block).
+static singleton. `KeyBindings` (in `game/`) wraps `EnumMap<Action, Integer>` where
+mouse buttons are offset by `MOUSE_BUTTON_OFFSET=1000`. `ChunkMesher.aoEnabled` is
+`public static volatile boolean` — written by the GL thread via `applySettings()`,
+read by worker threads. AO toggle triggers `clientWorld.invalidateAllMeshes()` only
+when the value actually changes. `brightnessFloor` [0.0, 0.3] is set as a shader
+uniform every render frame. Mouse sensitivity stored as human-readable multiplier
+(1.0 = normal), multiplied by base factor `0.1f` at the camera rotation call site.
+
+### 9. UI System
+`UiTheme` is abstract; `DarkTheme` and `LightTheme` are built-in. `ScreenManager`
+owns the active theme. Full-screen menus replace world render; overlay screens render
+after world render — `GameLoop.loop()` branches on `screenManager.isActiveScreenOverlay()`.
+`Screen.render()` signature: `render(UiTheme, float deltaTime, int w, int h)`.
+
+### 10. Multi-Viewer Chunk Streaming
+`World.update()` accepts `List<World.ViewerInfo>`. Chunks loaded if in range of ANY
+viewer; unloaded only when out of range of ALL viewers.
+
+### 11. Per-Player Visibility
+`PlayerSession` tracks visible remote player IDs. `ServerWorld` manages spawn/despawn
+each tick when players enter/leave each other's render distance.
+
+### 12. GL Resource Construction Timing
+Classes instantiated before `GameLoop.init()` must not create GL resources in their
+constructor. Pattern: nullable field + `initRenderResources()` called after `window.init()`.
+
+### 13. Packet Addition Checklist
+Every new packet requires exactly 4 touch points:
+1. `PacketId` — add wire ID constant
+2. `PacketEncoder` — add `else if` branch, write ID + payload
+3. `PacketDecoder` — add `case` to switch, read payload in same order
+4. Handler — `ServerHandler` (clientbound) or `ClientHandler` (serverbound)
+Missing any one silently drops the packet.
 
 ## How to Build and Run
 ```bash
@@ -246,8 +246,7 @@ history of decisions, bugs encountered, and current state.
 
 ### GL Thread Safety is Critical
 If any code in `server/` or `game/` (World, ServerWorld, etc.) imports or calls
-anything from `engine/` — flag it immediately. That is always a bug. The server
-thread has no GL context and will crash natively without a clear Java stack trace.
+anything from `engine/` — flag it immediately. That is always a bug.
 
 ### Developer Knowledge Level
 The developer is learning OpenGL, GLSL, game networking, and 3D math through this
@@ -255,8 +254,7 @@ project. Explain concepts before code. Prioritize code they can understand over
 clever optimizations.
 
 ### Flag Architectural Consequences
-Always flag when a decision will have long-term consequences. The developer is
-intentionally learning from these decisions — don't hide them.
+Always flag when a decision will have long-term consequences.
 
 ### AI Honesty
 This project intentionally explores AI limitations. Be honest when a problem requires
@@ -264,8 +262,7 @@ human debugging judgment that AI cannot reliably provide.
 
 ### Provide Exact File and Location for Every Change
 When giving code changes, always state the exact file path, the exact method or block
-to replace, and provide the full replacement block. The codebase is large enough that
-"find the X method and update it" is not sufficient. Full copy-pasteable blocks only.
+to replace, and provide the full replacement block. Full copy-pasteable blocks only.
 
 ### What NOT to Do
 - Do not suggest Maven, Vulkan, Spring, Jakarta, or any web framework
@@ -273,12 +270,12 @@ to replace, and provide the full replacement block. The codebase is large enough
 - Do not put GL calls outside the main thread
 - Do not import `engine/` from `server/` or `game/World.java`
 - Do not add `Mesh` or rendering code to `World.java` or `ServerWorld.java`
-- Do not construct GL resources (VAOs, VBOs, textures) in constructors of classes
-  that are instantiated before GameLoop.init() — the GL context does not exist yet
+- Do not construct GL resources in constructors of classes instantiated before `GameLoop.init()`
 - Do not make `World.renderDistanceH` static again — it is a live mutable field
 - Do not skip calling `inputHandler.consumeMouseClick()` after UI-to-gameplay transitions
-- Do not store mouse sensitivity as a raw camera multiplier — store as human-readable
-  (1.0 = normal) and apply the 0.1f base scale factor at the camera rotation call site
+- Do not store mouse sensitivity as a raw camera multiplier
+- Do not place `glClearColor` after `glClear` — order is always: set color, then clear
+- Do not add new packets without touching all 4 required files (see Packet Addition Checklist)
 
 ## Development Phases
 - **Phase 0 (done):** Foundation — window, OpenGL context, game loop, triangle
@@ -288,22 +285,24 @@ to replace, and provide the full replacement block. The codebase is large enough
 - **Phase 4 (done):** Performance — greedy meshing, AO, textures, async streaming
 - **Phase 5 (done):** Multiplayer — client/server split, chunk streaming, block sync
 - **Phase 6 (current):** Foundation for extensibility
-  - **6A (done):** Block Registry — Block enum → registered class with stable IDs
-  - **6B (done):** Menu / UI System
-    - **6B-1 (done):** UI rendering foundation — GlyphAtlas, UiShader, UiRenderer
-    - **6B-2 (done):** Screen abstraction — Screen, ScreenManager, GameLoop wiring
-    - **6B-3 (done):** Main menu — Singleplayer / Multiplayer / Settings / Quit
-    - **6B-4 (done):** World selection screen — list, create (name+seed), delete, launch
-    - **6B-5 (done):** Multiplayer connect screen — IP/port input, direct server connect
-    - **6B-6 (done):** In-game pause menu — overlay, Resume / Settings / Main Menu / Quit
-    - **6B-theme (done):** UI Theme system — UiTheme abstract class, DarkTheme, LightTheme
-    - **6B-7 (done):** Full settings system — GameSettings, KeyBindings, Action, SettingsScreen
-  - **6C (in progress):** Lighting + Day/Night Cycle
-    - **6C-1/2/3 (done):** LightEngine, vertex light baking, shader integration
-    - **6C-4 (next):** Brightness slider + AO toggle settings
-    - **6C-5:** Day/night cycle (WorldTime, ambientFactor uniform, server packet)
-    - **6C-6:** Skylight recompute on block place/break
-  - **6D:** Entity System + Player Model — entity framework, skeletal player model,
-    item drop entities. Nametags above player models deferred to here.
+  - **6A (done):** Block Registry
+  - **6B (done):** Menu / UI System (full tabbed settings, all screens)
+  - **6C (done):** Lighting + Day/Night Cycle
+    - LightEngine, vertex brightness baking, shader uniforms
+    - Brightness slider, AO toggle, async remesh on toggle
+    - WorldTime, day/night sky color + ambient factor, WorldTimePacket sync
+    - Skylight recompute on block change (automatic via dirty-mark pipeline)
+  - **6D (next):** Entity System + Player Model — entity framework, skeletal player
+    model, item drop entities. Nametags deferred to here.
   - **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.
-- **Phase 7:** Modding API
+- **Phase 7:** BFS Light Propagation
+  - Queue-based flood fill across chunk boundaries (skylight + block light)
+  - Correct gradients under overhangs, into caves, around corners
+  - Torch-style point light sources with proper spread
+  - Incremental updates on block place/break (not full chunk recompute)
+  - Data layout already in place (lightData nibble arrays, LightEngine) — only
+    the propagation algorithm changes.
+- **Phase 8:** Modding API
+  - Block / item / entity registry hooks exposed to external code
+  - World gen hooks, event listeners
+  - Scripting runtime

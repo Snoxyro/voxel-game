@@ -102,6 +102,10 @@ public class PacketEncoder extends MessageToByteEncoder<Packet> {
         } else if (msg instanceof PlayerDespawnPacket p) {
             out.writeByte(PacketId.PLAYER_DESPAWN.id);
             out.writeInt(p.playerId());
+            
+        } else if (msg instanceof WorldTimePacket p) {
+            out.writeByte(PacketId.WORLD_TIME.id);
+            out.writeLong(p.worldTick());
 
         } else {
             throw new IllegalArgumentException(

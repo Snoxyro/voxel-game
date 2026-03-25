@@ -1,5 +1,6 @@
 package com.voxelgame.server;
 
+import com.voxelgame.common.network.Packet;
 import com.voxelgame.common.network.packets.BlockChangePacket;
 import com.voxelgame.common.network.packets.ChunkDataPacket;
 import com.voxelgame.common.network.packets.UnloadChunkPacket;
@@ -328,6 +329,18 @@ public class ServerWorld {
             if (player.hasChunk(affected)) {
                 player.sendPacket(packet);
             }
+        }
+    }
+
+    /**
+     * Broadcasts a packet to every connected player.
+     * Called from the server tick thread.
+     *
+     * @param packet the packet to send
+     */
+    public void broadcastToAll(Packet packet) {
+        for (PlayerSession session : players) {
+            session.getChannel().writeAndFlush(packet);
         }
     }
 

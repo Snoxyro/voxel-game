@@ -68,6 +68,9 @@ public class PacketDecoder extends MessageToMessageDecoder<ByteBuf> {
 
             case PLAYER_DESPAWN ->
                 new PlayerDespawnPacket(in.readInt());
+            
+            case WORLD_TIME ->
+                new WorldTimePacket(in.readLong());
 
             default -> throw new IllegalStateException(
                 "PacketDecoder: no deserializer for " + id);

@@ -62,6 +62,8 @@ public class ServerHandler extends SimpleChannelInboundHandler<Packet> {
             clientWorld.queueRemotePlayerMove(p.playerId(), p.x(), p.y(), p.z());
         } else if (msg instanceof PlayerDespawnPacket p) {
             clientWorld.queueRemotePlayerDespawn(p.playerId());
+        } else if (msg instanceof WorldTimePacket p) {
+            clientWorld.applyWorldTime(p.worldTick());
         } else {
             System.out.println("[Client] Unhandled packet: " + msg.getClass().getSimpleName());
         }

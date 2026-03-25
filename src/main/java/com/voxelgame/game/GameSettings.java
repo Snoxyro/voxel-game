@@ -89,8 +89,10 @@ public class GameSettings {
     private int        renderDistance;
     private int        fov;
     private float      mouseSensitivity;
+    private float brightnessFloor = 0.0f;
     private String     theme;
     private boolean    vsync;
+    private boolean aoEnabled = true;
     private WindowMode windowMode;
 
     /** Keybindings — serialized into the same properties file. */
@@ -151,8 +153,10 @@ public class GameSettings {
         renderDistance  = parseInt(props, KEY_RENDER_DISTANCE, DEFAULT_RENDER_DISTANCE, 2, 32);
         fov             = parseInt(props, KEY_FOV, DEFAULT_FOV, 50, 110);
         mouseSensitivity = parseFloat(props, KEY_MOUSE_SENS, DEFAULT_MOUSE_SENS, 0.01f, 2.0f);
+        brightnessFloor = Math.max(0.0f, Math.min(0.3f, Float.parseFloat(props.getProperty("brightnessFloor", "0.0"))));
         theme           = props.getProperty(KEY_THEME, DEFAULT_THEME).trim();
         vsync           = parseBoolean(props, KEY_VSYNC, DEFAULT_VSYNC);
+        aoEnabled       = Boolean.parseBoolean(props.getProperty("aoEnabled", "true"));
         windowMode      = WindowMode.fromString(props.getProperty(KEY_WINDOW_MODE, DEFAULT_WINDOW_MODE.name()));
 
         keyBindings.loadFrom(props);
@@ -188,8 +192,10 @@ public class GameSettings {
         props.setProperty(KEY_RENDER_DISTANCE, String.valueOf(renderDistance));
         props.setProperty(KEY_FOV,             String.valueOf(fov));
         props.setProperty(KEY_MOUSE_SENS,      String.valueOf(mouseSensitivity));
+        props.setProperty("brightnessFloor", String.valueOf(brightnessFloor));
         props.setProperty(KEY_THEME,           theme);
         props.setProperty(KEY_VSYNC,           String.valueOf(vsync));
+        props.setProperty("aoEnabled", String.valueOf(aoEnabled));
         props.setProperty(KEY_WINDOW_MODE,     windowMode.name());
 
         keyBindings.saveTo(props);
@@ -263,6 +269,20 @@ public class GameSettings {
         this.mouseSensitivity = Math.max(0.01f, Math.min(2.0f, mouseSensitivity));
     }
 
+    /** @return the minimum brightness floor in [0.0, 0.3] — lifts unlit areas */
+    public float getBrightnessFloor() { return brightnessFloor; }
+
+    /**
+     * Sets the minimum brightness floor applied additively to fragment light values.
+     * Clamped to [0.0, 0.3]. At 0.0 caves are pitch black; at 0.3 unlit areas
+     * still look dark but shapes remain visible.
+     *
+     * @param brightnessFloor new value, clamped to [0.0, 0.3]
+     */
+    public void setBrightnessFloor(float brightnessFloor) {
+        this.brightnessFloor = Math.max(0.0f, Math.min(0.3f, brightnessFloor));
+    }
+
     /** @return theme identifier string — {@code "dark"} or {@code "light"} */
     public String getTheme() { return theme; }
 
@@ -286,4 +306,15 @@ public class GameSettings {
 
     /** @return the path this instance reads from and writes to */
     public Path getSettingsPath() { return settingsPath; }
+
+    /** @return true if ambient occlusion is enabled */
+    public boolean isAoEnabled() { return aoEnabled; }
+
+    /**
+     * Sets whether ambient occlusion is baked into chunk meshes.
+     * Changing this requires a full world remesh to take effect.
+     *
+     * @param aoEnabled true to enable AO darkening at block corners
+     */
+    public void setAoEnabled(boolean aoEnabled) { this.aoEnabled = aoEnabled; }
 }

@@ -28,7 +28,8 @@ public enum PacketId {
     PLAYER_SPAWN       (0x14),
     PLAYER_MOVE_CB     (0x15),
     PLAYER_DESPAWN     (0x16),
-    KEEPALIVE          (0x17);
+    KEEPALIVE          (0x17),
+    WORLD_TIME         (0x18);
 
     /** Increment when the packet format changes in a breaking way. */
     public static final int PROTOCOL_VERSION = 1;

@@ -15,9 +15,14 @@ uniform bool useTexture;
 // 0.0 = default (no floor, caves are dark). Up to ~0.3 at maximum brightness.
 // Applied as an additive lift on the gamma-mapped light value, so it never
 // affects the relative brightness difference between lit and dark areas.
-// Set from GameSettings when the settings screen saves. Defaults to 0.0 (GLSL
-// guarantees uninitialised uniforms are zero).
 uniform float u_brightnessFloor;
+
+// Scales overall scene brightness for the day/night cycle.
+// 1.0 = full daylight, ~0.15 = deepest night. Applied as a final multiplier
+// on the lit fragment colour so it dims the whole scene uniformly without
+// affecting the relative difference between lit and shadowed areas.
+// Set each frame from ClientWorld.getAmbientFactor() in GameLoop.render().
+uniform float u_ambientFactor;
 
 out vec4 fragColor;
 
@@ -31,9 +36,10 @@ void main() {
 
     if (useTexture) {
         // Sample the tile at the given UV (GL_REPEAT handles tiling) and layer.
-        // Multiply by vertColor (AO + directional shading) and light level.
+        // Multiply by vertColor (AO + directional shading), light level, and the
+        // day/night ambient factor.
         vec4 texSample = texture(texArray, fragTexCoord);
-        fragColor = vec4(texSample.rgb * vertColor * light, texSample.a);
+        fragColor = vec4(texSample.rgb * vertColor * light * u_ambientFactor, texSample.a);
     } else {
         fragColor = vec4(vertColor, 1.0);
     }

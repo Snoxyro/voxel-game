@@ -9,6 +9,7 @@ import com.voxelgame.common.world.RaycastResult;
 import com.voxelgame.engine.ui.DarkTheme;
 import com.voxelgame.engine.ui.LightTheme;
 import com.voxelgame.game.Action;
+import com.voxelgame.game.ChunkMesher;
 import com.voxelgame.game.GameSettings;
 import com.voxelgame.game.KeyBindings;
 import com.voxelgame.game.Player;
@@ -221,6 +222,23 @@ public class GameLoop {
         // Render distance — push to the server world if a session is active
         if (activeServer != null) {
             activeServer.setRenderDistance(settings.getRenderDistance());
+        }
+
+        // Brightness floor — bind the world shader to write the uniform
+        if (shaderProgram != null) {
+            shaderProgram.bind();
+            shaderProgram.setUniform("u_brightnessFloor", settings.getBrightnessFloor());
+            shaderProgram.unbind();
+        }
+
+        // AO toggle — update the mesher flag and trigger a full remesh if the
+        // value changed. The remesh is async — chunks rebuild over the next few
+        // frames at the normal worker rate, so there is no hitch.
+        if (ChunkMesher.aoEnabled != settings.isAoEnabled()) {
+            ChunkMesher.aoEnabled = settings.isAoEnabled();
+            if (clientWorld != null) {
+                clientWorld.invalidateAllMeshes();
+            }
         }
     }
 
@@ -722,11 +740,23 @@ public class GameLoop {
      * Renders the current frame: 3D world, block highlight, then 2D HUD.
      */
     private void render() {
+        // Sky colour tracks the day/night cycle. Falls back to a default blue if no
+        // world is loaded (e.g. while the main menu is open).
+        if (clientWorld != null) {
+            float[] sky = clientWorld.getSkyColor();
+            GL11.glClearColor(sky[0], sky[1], sky[2], 1.0f);
+        } else {
+            GL11.glClearColor(0.53f, 0.81f, 0.98f, 1.0f);
+        }
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
 
         shaderProgram.bind();
         shaderProgram.setUniform("projectionMatrix", camera.getProjectionMatrix());
         shaderProgram.setUniform("viewMatrix", camera.getViewMatrix());
+        // Brightness floor: lifts pitch-black unlit areas. Driven by the settings slider.
+        // 0.0 = full darkness in caves; 0.3 = dark but shapes visible.
+        shaderProgram.setUniform("u_brightnessFloor", settings.getBrightnessFloor());
+        shaderProgram.setUniform("u_ambientFactor", clientWorld != null ? clientWorld.getAmbientFactor() : 1.0f);
         textureManager.bind();
         shaderProgram.setUniform("useTexture", true);
         lastRenderStats = clientWorld.render(shaderProgram, camera.getProjectionMatrix(), camera.getViewMatrix());

@@ -1,5 +1,7 @@
 package com.voxelgame.server;
 
+import com.voxelgame.common.network.packets.WorldTimePacket;
+import com.voxelgame.common.world.WorldTime;
 import com.voxelgame.server.network.ServerNetworkManager;
 import com.voxelgame.server.storage.FlatFileChunkStorage;
 import com.voxelgame.server.storage.WorldMeta;
@@ -56,6 +58,15 @@ public class GameServer {
 
     /** Monotonically increasing player ID counter. Thread-safe — assigned on Netty thread. */
     private final AtomicInteger nextPlayerId = new AtomicInteger(1);
+
+    /** Tracks world time — advanced each tick, broadcast to clients every second. */
+    private final WorldTime worldTime = new WorldTime();
+
+    /** Ticks since the last {@link WorldTimePacket} was broadcast. */
+    private int timeBroadcastCooldown = 0;
+
+    /** Broadcast world time once per second (every 20 ticks). */
+    private static final int TIME_BROADCAST_INTERVAL = 20;
 
     /**
      * Creates a GameServer with default port and world directory {@code worlds/default}.
@@ -151,6 +162,15 @@ public class GameServer {
      * Phase 5D: will also process player move packets and broadcast positions.
      */
     private void tick() {
+        // Advance world time and broadcast to clients once per second.
+        worldTime.tick();
+        timeBroadcastCooldown++;
+        if (timeBroadcastCooldown >= TIME_BROADCAST_INTERVAL) {
+            timeBroadcastCooldown = 0;
+            WorldTimePacket pkt = new WorldTimePacket(worldTime.getWorldTick());
+            serverWorld.broadcastToAll(pkt);
+        }
+
         serverWorld.tick();
     }
 

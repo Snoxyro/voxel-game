@@ -226,6 +226,15 @@ public class ChunkMesher {
     private static final int FACE_WEST   = 5;
 
     /**
+     * Global AO toggle — readable by all worker threads via volatile visibility.
+     * When false, {@link #computeAO} always returns 3 (fully open, no darkening).
+     * Written by the GL thread via {@link GameSettings}; read by worker threads
+     * during mesh generation. Volatile ensures the write is immediately visible
+     * across threads without locking.
+     */
+    public static volatile boolean aoEnabled = true;
+
+    /**
      * Generates the greedy-merged visible mesh for the given chunk, with
      * per-vertex ambient occlusion baked into vertex colors.
      *
@@ -630,6 +639,9 @@ public class ChunkMesher {
      */
     private static int computeAO(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
                                   int bx, int by, int bz, int face, int vertex) {
+        // AO disabled globally — return fully open (no darkening on any vertex).
+        if (!aoEnabled) return 3;
+
         int[][] offsets = AO_OFFSETS[face][vertex];
         boolean side1  = !isAirAt(chunk, pos, neighbors,
                 bx + offsets[0][0], by + offsets[0][1], bz + offsets[0][2]);

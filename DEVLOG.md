@@ -3308,6 +3308,190 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
+## Entry 052 — Phase 6C-4/5: Brightness Slider + AO Toggle
+**Date:** 25.03.2026
+**Phase:** 6 — Foundation for extensibility (6C)
+
+### What Was Done
+
+#### 6C-4 — Brightness slider
+- Added `brightnessFloor` field (float, 0.0–0.3) to `GameSettings`. Load/save
+  via `settings.properties` key `brightnessFloor`. Default 0.0.
+- Added Brightness slider to `SettingsScreen` Graphics tab (between FOV and UI
+  Theme). Display shows 0–100% (`Math.round(value / 0.3 * 100)`). Arrow key nudge
+  step 0.01f. Dirty highlight when working value differs from saved.
+- `GameLoop.render()` calls `shaderProgram.setUniform("u_brightnessFloor",
+  settings.getBrightnessFloor())` each frame while shader is bound.
+- `GameLoop.applySettings()` binds the shader, sets the uniform, unbinds — allows
+  immediate effect on save without waiting for next render frame. Guarded with
+  `shaderProgram != null`.
+
+#### 6C-5 — AO toggle
+- Added `aoEnabled` boolean field to `GameSettings`. Default true. Persisted as
+  `aoEnabled` in `settings.properties`.
+- Added `public static volatile boolean aoEnabled = true` to `ChunkMesher`.
+  `computeAO()` early-returns 3 (fully open) when false. Volatile ensures GL-thread
+  write is immediately visible to all worker threads without locking.
+- Added `invalidateAllMeshes()` to `ClientWorld` — adds all loaded chunk positions
+  to `dirtyMeshes`. Used to trigger a full world remesh when AO is toggled.
+- `GameLoop.applySettings()` compares `ChunkMesher.aoEnabled` against
+  `settings.isAoEnabled()` before writing — only triggers a remesh when the value
+  actually changed. Remesh is async; no frame hitch.
+- Added Ambient Occlusion ON/OFF toggle to `SettingsScreen` Graphics tab. Dirty
+  highlight when working value differs from saved.
+
+### Decisions Made
+- `u_brightnessFloor` set every render frame (not just on save) — uniform must be
+  refreshed after shader program rebind. Simpler than tracking dirty state.
+- `ChunkMesher.aoEnabled` is `public static volatile` — AO is a global setting,
+  not per-chunk. Static is appropriate; volatile is required for cross-thread
+  visibility without locks.
+- AO remesh guard (`if changed`) prevents unnecessary full remesh when user opens
+  and closes settings without changing the AO toggle.
+
+### Problems Encountered
+- None.
+
+### AI Assistance Notes
+- Claude wrote GameSettings, ChunkMesher, ClientWorld, and GameLoop changes.
+- Copilot wrote SettingsScreen slider and toggle additions via structured prompt.
+
+### Lessons / Observations
+- The pattern for any setting that affects mesh content: static volatile flag in
+  the mesher → check-and-set in applySettings → invalidateAllMeshes on change.
+  Reusable for any future per-mesh setting (e.g. smooth lighting, LOD level).
+
+---
+
+## Entry 053 — Phase 6C-6/7: Day/Night Cycle + Skylight Recompute
+**Date:** 25.03.2026
+**Phase:** 6 — Foundation for extensibility (6C)
+
+### What Was Done
+
+#### 6C-6 — Day/night cycle
+- Created `WorldTime.java` in `common/world/`. Pure math, no GL, no network.
+  `DAY_LENGTH_TICKS = 24_000` (20 real minutes at 20 TPS). `worldTick` field
+  is `volatile` for safe cross-thread reads. `tick()` advances by one each server
+  tick. `getAmbientFactor()` uses a sine curve centred on noon (tick 6000) remapped
+  from [-1,1] to [MIN_AMBIENT=0.15, 1.0]. `getSkyColor()` lerps between day blue
+  `(0.53, 0.81, 0.98)` and night dark blue `(0.02, 0.02, 0.10)` using the same curve.
+- Created `WorldTimePacket.java` in `common/network/packets/`. Record with single
+  `long worldTick` field. Clientbound.
+- Added `WORLD_TIME (0x18)` to `PacketId`.
+- Added `WorldTimePacket` encode/decode to `PacketEncoder` / `PacketDecoder`.
+  Wire format: 1-byte ID + 8-byte long.
+- `GameServer` gains `WorldTime worldTime`, `timeBroadcastCooldown` int, and
+  `TIME_BROADCAST_INTERVAL = 20` constant. `tick()` advances time and broadcasts
+  `WorldTimePacket` via `serverWorld.broadcastToAll()` every 20 ticks (once/second).
+- Added `broadcastToAll(Packet)` to `ServerWorld` — iterates the `players` list and
+  calls `session.getChannel().writeAndFlush()`. Added `getChannel()` to `PlayerSession`.
+- `ClientWorld` gains `WorldTime worldTime` field. Added `applyWorldTime(long)`,
+  `getAmbientFactor()`, `getSkyColor()` methods. `applyWorldTime` is called from
+  the Netty thread — safe via `volatile` field in `WorldTime`.
+- `ServerHandler.channelRead0()` routes `WorldTimePacket` to
+  `clientWorld.applyWorldTime()`.
+- `default.frag` gains `uniform float u_ambientFactor`. Applied as a final
+  multiplier on the fully lit+AO fragment colour: `texSample.rgb * vertColor *
+  light * u_ambientFactor`. Untextured geometry bypasses it (already bypasses
+  `useTexture` branch).
+- `GameLoop.render()`: dynamic `glClearColor` from `clientWorld.getSkyColor()`
+  (falls back to hardcoded day blue when no world loaded). Sets
+  `u_ambientFactor` uniform each frame from `clientWorld.getAmbientFactor()`
+  (defaults to 1.0 when no world loaded).
+
+#### 6C-7 — Skylight recompute on block place/break
+- No additional code required. `drainPendingBlockChanges()` in `ClientWorld`
+  already dirty-marks the modified chunk and all face-adjacent neighbors. Every
+  dirty chunk runs `LightEngine.computeChunkLight()` before remeshing in
+  `processDirtyMeshes()`. The chunk directly below a broken surface block is
+  always in the dirty set via `markNeighborsDirty`, and `computeSkyLight`
+  checks the chunk above via the neighbor snapshot — so the skylight column
+  updates correctly through one chunk boundary automatically.
+
+### Decisions Made
+- `worldTick` in `WorldTime` is `volatile` — `applyWorldTime` is called from
+  the Netty I/O thread while `getAmbientFactor` / `getSkyColor` are called from
+  the GL thread. Volatile provides the necessary visibility guarantee for a single
+  `long` write without the overhead of a lock.
+- `u_ambientFactor` is set every render frame (same pattern as `u_brightnessFloor`).
+  No dirty tracking — simpler and the cost is one `glUniform1f` call per frame.
+- Sync interval is 20 ticks (1 real second). At a 20-minute day length, 1-second
+  staleness is imperceptible. No client-side interpolation needed.
+- `glClearColor` falls back to day blue when `clientWorld` is null (main menu).
+  The menu always appears in daylight — cosmetically correct.
+- Sky colour and ambient factor share the same sine curve so they stay visually
+  consistent — geometry and sky dim together.
+- Day/night does not affect untextured geometry (block highlight wireframe, remote
+  player boxes). These bypass the `useTexture` branch and are unaffected by
+  `u_ambientFactor`.
+- 6C-7 confirmed as already-implemented: the existing dirty-mark + LightEngine
+  pipeline handles skylight recompute automatically on every block change. No
+  additional code was needed.
+
+### Problems Encountered
+- `u_brightnessFloor` was accidentally removed from `default.frag` when
+  `u_ambientFactor` was added. Shader compilation failed with
+  `error C1503: undefined variable "u_brightnessFloor"`. Fixed by restoring
+  both uniform declarations.
+- `glClearColor` was placed after `glClear` instead of before it — previous frame
+  contents were never erased, causing severe render corruption (geometry "extending"
+  across screen). Fixed by moving `glClearColor` to immediately before `glClear`.
+- `WorldTimePacket` was not routed in `ServerHandler` — server broadcast worked
+  but client logged `[Client] Unhandled packet: WorldTimePacket` every tick.
+  Fixed by adding the `else if (packet instanceof WorldTimePacket p)` branch.
+- `broadcastToAll` was added to `GameServer` instead of `ServerWorld` — `players`
+  list and `getChannel()` live in `ServerWorld`. Moved to correct class. Added
+  `getChannel()` to `PlayerSession`.
+
+### AI Assistance Notes
+- Claude wrote all new files and all changes across all 10 affected files.
+- Three of the four bugs above were caught at runtime on first run.
+
+### Lessons / Observations
+- `glClearColor` and `glClear` must always appear in this order: set color, then
+  clear. Reversing them produces one of the most visually dramatic bugs possible —
+  every frame bleeds into the next. Always pair them.
+- When adding a new packet, there are always 4 mandatory touch points: `PacketId`,
+  `PacketEncoder`, `PacketDecoder`, and the receiving handler (`ServerHandler` or
+  `ClientHandler`). Missing any one silently drops the packet with an unhandled log.
+- The dirty-mark + LightEngine pipeline built in 6C-2/3 was forward-designed
+  correctly — skylight recompute on block change required zero additional code.
+- `volatile` on a `long` field is the minimal correct solution for a single-writer
+  (Netty thread) / single-reader (GL thread) value. No lock, no `AtomicLong` needed
+  when ordering guarantees don't extend beyond the single field.
+
+### Future Reference — Transparent Blocks
+Transparent and semi-transparent blocks (glass, water, leaves) require significant
+rendering pipeline changes when they arrive:
+1. `BlockType` needs a `transparent` boolean and `occludesFace()` method. Current
+   face occlusion culling assumes all solid blocks hide their neighbors — transparent
+   blocks cannot participate in this.
+2. `ChunkMesher` must produce two vertex buffers per chunk: one opaque, one
+   transparent. `ClientChunk` stores two `Mesh` objects.
+3. The render loop becomes: draw all opaque geometry → depth-sort transparent chunks
+   back-to-front → draw transparent geometry. Sorting is required because OpenGL
+   blends a transparent fragment with whatever is already in the framebuffer — draw
+   order matters.
+4. Greedy meshing for transparent faces is disabled or heavily restricted — merged
+   faces that are partially visible through each other produce incorrect blending.
+5. `BlockRegistry` / `BlockType` from 6A is already shaped correctly for this.
+   Nothing done to date makes the transparent block implementation harder.
+Deferred to Phase 8+. Data layout is compatible.
+
+### Phase Roadmap Revision — BFS Before Modding
+Phase ordering updated after 6C completion:
+- **Phase 7** promoted to **BFS Light Propagation** (was: Modding API).
+- **Phase 8** becomes **Modding API** (was: BFS + deferred items).
+Rationale: BFS propagation completes the lighting story (correct gradients under
+overhangs, torch spread), is a prerequisite for torches feeling correct, and has
+significantly higher visual and gameplay impact than a modding API at this stage.
+The modding API requires entity and item systems that don't exist yet anyway —
+deferring it one phase costs nothing. BFS data layout (lightData nibble arrays,
+`setSkyLight`/`setBlockLight`, `LightEngine`) is already fully in place from 6C-1.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

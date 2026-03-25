@@ -7,6 +7,7 @@ import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
 import com.voxelgame.common.world.LightEngine;
+import com.voxelgame.common.world.WorldTime;
 import com.voxelgame.engine.Mesh;
 import com.voxelgame.engine.ShaderProgram;
 import com.voxelgame.game.ChunkMesher;
@@ -50,6 +51,9 @@ public class ClientWorld implements BlockView {
     // Remote player state — main (GL) thread only
     private final Map<Integer, RemotePlayer> remotePlayers = new HashMap<>();
     private RemotePlayerRenderer remotePlayerRenderer;
+
+    /** Client-side world time — updated by WorldTimePackets from the server. */
+    private final WorldTime worldTime = new WorldTime();
 
     // Cross-thread queues for remote player events — written by Netty, drained by main thread
     private record SpawnData(int playerId, String username, float x, float y, float z) {}
@@ -318,6 +322,20 @@ public class ClientWorld implements BlockView {
         }
     }
 
+    /**
+     * Marks every currently loaded chunk as needing a full mesh rebuild.
+     *
+     * <p>Called when a setting that affects mesh content changes globally —
+     * currently only the AO toggle. All chunk positions are added to the dirty
+     * queue; the worker thread pool will rebuild them over the following frames
+     * at the normal async rate.
+     *
+     * <p>Must be called on the GL thread (reads the chunk map).
+     */
+    public void invalidateAllMeshes() {
+        dirtyMeshes.addAll(chunks.keySet());
+    }
+
     private void processDirtyMeshes() {
         Iterator<ChunkPos> it = dirtyMeshes.iterator();
         while (it.hasNext()) {
@@ -399,6 +417,36 @@ public class ClientWorld implements BlockView {
             }
         }
         return neighbors;
+    }
+
+    /**
+     * Applies a world time update received from the server.
+     * Called from the Netty I/O thread — safe due to volatile field in WorldTime.
+     *
+     * @param tick the server-authoritative world tick
+     */
+    public void applyWorldTime(long tick) {
+        worldTime.setWorldTick(tick);
+    }
+
+    /**
+     * Returns the ambient light factor for the current time of day.
+     * Computed from the most recently received server tick.
+     *
+     * @return ambient factor in [0.15, 1.0]
+     */
+    public float getAmbientFactor() {
+        return worldTime.getAmbientFactor();
+    }
+
+    /**
+     * Returns the sky RGB colour for the current time of day.
+     * Used to set glClearColor before each frame.
+     *
+     * @return float[3] RGB in [0.0, 1.0]
+     */
+    public float[] getSkyColor() {
+        return worldTime.getSkyColor();
     }
 
     // -------------------------------------------------------------------------
