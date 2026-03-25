@@ -246,6 +246,8 @@ public class ChunkMesher {
      * @param pos       the chunk's position in the world grid
      * @param neighbors snapshot of all 26 adjacent neighbor chunks
      * @return interleaved float array [x, y, z, r, g, b, ...], trimmed to exact size
+    * @thread mesh-worker (typically), any
+    * @gl-state n/a
      */
     public static float[] mesh(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors) {
         if (chunk.isAllAir()) return new float[0];
@@ -573,6 +575,8 @@ public class ChunkMesher {
      * @param by        local Y
      * @param bz        local Z
      * @return light level in [0, 15]
+    * @thread mesh-worker
+    * @gl-state n/a
      */
     private static int getLightAt(Chunk chunk, ChunkPos pos,
                                 Map<ChunkPos, Chunk> neighbors,
@@ -606,6 +610,8 @@ public class ChunkMesher {
      * @param bz        local Z of the solid block
      * @param face      face direction index (FACE_TOP, FACE_BOTTOM, etc.)
      * @return light level in [0, 15]
+    * @thread mesh-worker
+    * @gl-state n/a
      */
     private static int getLightForFace(Chunk chunk, ChunkPos pos,
                                         Map<ChunkPos, Chunk> neighbors,
@@ -636,6 +642,8 @@ public class ChunkMesher {
      * @param face      face direction index (FACE_TOP, FACE_BOTTOM, etc.)
      * @param vertex    vertex index within the face (0–3)
      * @return AO value in [0, 3]
+    * @thread mesh-worker
+    * @gl-state n/a
      */
     private static int computeAO(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
                                   int bx, int by, int bz, int face, int vertex) {
@@ -669,6 +677,9 @@ public class ChunkMesher {
      *   bits 23–24:  AO vertex 3   (0–3)
      *   bits 25–28:  light level   (0–15)
      * </pre>
+    *
+    * @thread mesh-worker
+    * @gl-state n/a
      */
     private static int packMask(int blockId, int ao0, int ao1, int ao2, int ao3, int light) {
         return (blockId + 1)
@@ -696,6 +707,8 @@ public class ChunkMesher {
      *
      * @param mask SIZE×SIZE mask — 0 = no face, positive = packed(type, ao0..ao3)
      * @return flat int array of quads, length = quadCount × 10
+    * @thread mesh-worker
+    * @gl-state n/a
      */
     private static int[] buildMergedQuads(int[][] mask) {
         int[] result = new int[Chunk.SIZE * Chunk.SIZE * 10];
@@ -748,6 +761,9 @@ public class ChunkMesher {
     /**
      * Ensures the buffer has at least {@code needed} free slots starting at
      * {@code size}. Doubles capacity if not. Returns the (possibly new) buffer.
+      *
+      * @thread mesh-worker
+      * @gl-state n/a
      */
     private static float[] ensureCapacity(float[] buf, int size, int needed) {
         if (size + needed <= buf.length) return buf;
@@ -770,6 +786,8 @@ public class ChunkMesher {
      * @param ly        local Y
      * @param lz        local Z
      * @return true if the position is air or in an unloaded/missing neighbor
+    * @thread mesh-worker
+    * @gl-state n/a
      */
     private static boolean isAirAt(Chunk chunk, ChunkPos pos, Map<ChunkPos, Chunk> neighbors,
                                     int lx, int ly, int lz) {
@@ -822,6 +840,8 @@ public class ChunkMesher {
      * @param ao2              AO at v2 (0–3)
      * @param ao3              AO at v3 (0–3)
      * @return new size after writing 60 floats (6 vertices × 10 floats)
+    * @thread mesh-worker
+    * @gl-state n/a
      */
     private static int emitQuad(float[] buf, int size,
                                  float[] color, float directionalShade, float aoStrength,

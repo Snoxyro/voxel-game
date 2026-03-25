@@ -134,6 +134,8 @@ public class World implements BlockView {
      * Creates a World with the given world seed.
      *
      * @param seed world seed — same seed always produces identical terrain
+        * @thread server-tick (construction thread)
+        * @gl-state n/a
      */
     public World(long seed, ChunkStorage storage) {
         this.terrainGenerator = new TerrainGenerator(seed);
@@ -144,6 +146,8 @@ public class World implements BlockView {
      * Returns the current horizontal render distance in chunk units.
      *
      * @return horizontal chunk radius
+        * @thread any
+        * @gl-state n/a
      */
     public int getRenderDistanceH() {
         return renderDistanceH;
@@ -161,6 +165,8 @@ public class World implements BlockView {
      * automatically.
      *
      * @param chunks new horizontal radius in chunk units
+    * @thread any
+    * @gl-state n/a
      */
     public void setRenderDistance(int chunks) {
         int clamped = Math.max(2, Math.min(32, chunks));
@@ -186,6 +192,9 @@ public class World implements BlockView {
      * Drives chunk streaming for all active viewers. Call once per tick.
      *
      * @param viewers active viewer positions and look directions
+        * @thread server-tick
+        * @gl-state n/a
+        * @see #scheduleNeededChunks(List)
      */
     public void update(List<ViewerInfo> viewers) {
         // If render distance was reduced, do an immediate unload sweep before anything else.
@@ -225,6 +234,8 @@ public class World implements BlockView {
     * Returns {@link Blocks#AIR} for unloaded chunks.
      *
      * {@inheritDoc}
+        * @thread server-tick
+        * @gl-state n/a
      */
     @Override
     public BlockType getBlock(int worldX, int worldY, int worldZ) {
@@ -253,6 +264,8 @@ public class World implements BlockView {
      * @param worldY world-space Y
      * @param worldZ world-space Z
      * @param type   block type to place ({@link Blocks#AIR} to remove)
+    * @thread server-tick
+    * @gl-state n/a
      */
     public void setBlock(int worldX, int worldY, int worldZ, BlockType type) {
         int cx = Math.floorDiv(worldX, Chunk.SIZE);
@@ -282,6 +295,8 @@ public class World implements BlockView {
      *
      * @param pos the chunk grid position
      * @return the chunk, or null if unloaded
+    * @thread server-tick
+    * @gl-state n/a
      */
     public Chunk getChunk(ChunkPos pos) {
         return chunks.get(pos);
@@ -293,6 +308,8 @@ public class World implements BlockView {
      * to stream to each connected player.
      *
      * @return unmodifiable set of loaded chunk positions
+    * @thread server-tick
+    * @gl-state n/a
      */
     public Set<ChunkPos> getLoadedChunkPositions() {
         return Collections.unmodifiableSet(chunks.keySet());
@@ -305,6 +322,9 @@ public class World implements BlockView {
     /**
      * Shuts down the generation thread pool and clears all chunk data.
      * Call once on server shutdown.
+        *
+        * @thread server-tick
+        * @gl-state n/a
      */
     public void cleanup() {
         flushDirtyChunks(); // persist all pending writes before shutdown
@@ -319,6 +339,9 @@ public class World implements BlockView {
     /**
      * Drains completed generation results into the chunk map.
      * Discards results for chunks that have moved out of range while the worker was running.
+        *
+        * @thread server-tick
+        * @gl-state n/a
      */
     private void drainPendingChunks(List<ViewerInfo> viewers) {
         PendingChunk pending;

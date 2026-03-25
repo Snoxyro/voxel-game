@@ -66,6 +66,8 @@ public class ServerWorld {
      *
      * @param seed world generation seed — same seed produces identical terrain every run
      * @param storage chunk storage implementation for persistence
+        * @thread server-tick (construction thread)
+        * @gl-state n/a
      */
     public ServerWorld(long seed, ChunkStorage storage) {
         this.world = new World(seed, storage);
@@ -81,6 +83,10 @@ public class ServerWorld {
      *   <li>Sends newly loaded chunks to each player and unloads chunks that left the
      *       server's loaded set.</li>
      * </ol>
+    *
+    * @thread server-tick
+    * @gl-state n/a
+    * @see World#update(List)
      */
     public void tick() {
         // --- Drain pending position updates ---
@@ -186,6 +192,8 @@ public class ServerWorld {
      *
      * @param player the player to update
      * @param loaded the set of currently loaded chunk positions in the world
+    * @thread server-tick
+    * @gl-state n/a
      */
     private void streamChunksToPlayer(PlayerSession player, Set<ChunkPos> loaded) {
         // Compute the player's current chunk-space position for distance sorting.
@@ -251,6 +259,8 @@ public class ServerWorld {
      * @param yaw   look yaw in degrees
      * @param pitch look pitch in degrees
      * @return float[3] normalised direction {x, y, z}
+    * @thread server-tick
+    * @gl-state n/a
      */
     private static float[] yawPitchToDir(float yaw, float pitch) {
         float yawRad   = (float) Math.toRadians(yaw);
@@ -271,6 +281,8 @@ public class ServerWorld {
      * @param pos    chunk to test
      * @param player the player whose view area is checked
      * @return true if the chunk is within range
+    * @thread server-tick
+    * @gl-state n/a
      */
     private boolean isInPlayerRange(ChunkPos pos, PlayerSession player) {
         int pcx = Math.floorDiv((int) player.getX(), Chunk.SIZE);
@@ -289,6 +301,9 @@ public class ServerWorld {
      * @param worldX world-space X of the broken block
      * @param worldY world-space Y
      * @param worldZ world-space Z
+    * @thread server-tick
+    * @gl-state n/a
+    * @see #broadcastBlockChange(int, int, int, BlockType)
      */
     public void applyBlockBreak(int worldX, int worldY, int worldZ) {
         // Server-side validation goes here in Phase 5D (range check, permissions, etc.)
@@ -304,6 +319,9 @@ public class ServerWorld {
      * @param worldY      world-space Y
      * @param worldZ      world-space Z
      * @param blockType placed block type
+    * @thread server-tick
+    * @gl-state n/a
+    * @see #isBlockInsideAnyPlayer(int, int, int)
      */
     public void applyBlockPlace(int worldX, int worldY, int worldZ, BlockType blockType) {
         if (blockType == Blocks.AIR) return; // reject AIR place
@@ -316,6 +334,9 @@ public class ServerWorld {
      * Sends a BlockChangePacket to every player who has the affected chunk loaded.
      * Players without the chunk don't need the update — they'll receive correct data
      * when the chunk streams to them later.
+        *
+        * @thread server-tick
+        * @gl-state n/a
      */
     private void broadcastBlockChange(int worldX, int worldY, int worldZ, BlockType blockType) {
         ChunkPos affected = new ChunkPos(
@@ -337,6 +358,8 @@ public class ServerWorld {
      * Called from the server tick thread.
      *
      * @param packet the packet to send
+        * @thread server-tick
+        * @gl-state n/a
      */
     public void broadcastToAll(Packet packet) {
         for (PlayerSession session : players) {
@@ -364,6 +387,8 @@ public class ServerWorld {
      * @param worldY world-space Y
      * @param worldZ world-space Z
      * @return true if the block volume intersects any player hitbox
+    * @thread server-tick
+    * @gl-state n/a
      */
     private boolean isBlockInsideAnyPlayer(int worldX, int worldY, int worldZ) {
         // Block occupies the unit cube: min=(worldX, worldY, worldZ), max=(worldX+1, worldY+1, worldZ+1)
@@ -389,6 +414,8 @@ public class ServerWorld {
      * (only writes a volatile flag and a primitive field).
      *
      * @param chunks new horizontal render distance in chunk units
+        * @thread any
+        * @gl-state n/a
      */
     public void setRenderDistance(int chunks) {
         world.setRenderDistance(chunks);
@@ -404,6 +431,8 @@ public class ServerWorld {
      * @param z        new world-space Z
      * @param yaw      look yaw in degrees
      * @param pitch    look pitch in degree
+    * @thread netty-io
+    * @gl-state n/a
      */
     public void queuePlayerMove(int playerId, float x, float y, float z, float yaw, float pitch) {
         pendingMoves.offer(new PendingMove(playerId, x, y, z, yaw, pitch));
@@ -418,6 +447,8 @@ public class ServerWorld {
      * Safe to call from any thread.
      *
      * @param session the newly logged-in player session
+        * @thread netty-io
+        * @gl-state n/a
      */
     public void addPlayer(PlayerSession session) {
         pendingAdds.offer(session);
@@ -428,6 +459,8 @@ public class ServerWorld {
      * Safe to call from any thread.
      *
      * @param playerId the ID of the player that disconnected
+        * @thread netty-io
+        * @gl-state n/a
      */
     public void removePlayer(int playerId) {
         pendingRemovals.offer(playerId);
@@ -437,6 +470,9 @@ public class ServerWorld {
      * Shuts down the underlying world's generation threads and releases GPU resources.
      * Must be called on the server shutdown — not a GL context requirement here since
      * the server has no GL dependency, but the executor shutdown matters.
+        *
+        * @thread server-tick
+        * @gl-state n/a
      */
     public void cleanup() {
         world.cleanup();

@@ -114,6 +114,8 @@ public class GameLoop {
      * @param clientWorld the client-side world — receives chunks from the server,
      *                    provides block queries for physics and raycasting
      * @param settings    the game settings, including key bindings and video options
+        * @thread GL-main
+        * @gl-state n/a
      */
     public GameLoop(ClientWorld clientWorld, GameSettings settings) {
         this.window      = new Window("Voxel Game", 1280, 720);
@@ -125,6 +127,9 @@ public class GameLoop {
      * Creates a configured {@link MainMenuScreen}.
      * Extracted as a factory so the Back button in WorldSelectScreen can
      * return here without duplicating the callback wiring.
+        *
+        * @thread GL-main
+        * @gl-state n/a
      */
     private MainMenuScreen createMainMenu() {
         Runnable onSingleplayer = () -> {
@@ -160,6 +165,8 @@ public class GameLoop {
      * the callback wiring in handleEscapeKey.
      *
      * @param win the GLFW window handle — needed for cursor mode changes
+        * @thread GL-main
+        * @gl-state n/a
      */
     private PauseMenuScreen createPauseMenu(long win) {
         return new PauseMenuScreen(
@@ -185,6 +192,9 @@ public class GameLoop {
      * is called to return to the appropriate previous screen.
      *
      * @param onDone called after save or cancel; should restore the previous screen
+        * @thread GL-main
+        * @gl-state n/a
+        * @see #applySettings()
      */
     private void openSettings(Runnable onDone) {
         screenManager.setScreen(new SettingsScreen(
@@ -201,6 +211,10 @@ public class GameLoop {
      *
      * <p>Not all settings are live — username takes effect on the next connection.
      * Only settings marked "Live? Yes" in the settings design table are applied here.
+        *
+        * @thread GL-main
+        * @gl-state shader=bound (temporarily for u_brightnessFloor write), then shader=unbound
+        * @see #applyWindowMode(GameSettings.WindowMode)
      */
     public void applySettings() {
         // VSync — changes the swap interval immediately
@@ -253,6 +267,9 @@ public class GameLoop {
      * @param worldName subdirectory of {@code worlds/} to load or create
      * @param seed      the seed for the new world, or null for a random seed
      * @param onFailure callback to invoke if the launch fails
+    * @thread GL-main (caller); spawns worker thread for blocking startup
+    * @gl-state n/a
+    * @see #loop()
      */
     private void launchWorld(String worldName, Long seed, Consumer<String> onFailure) {
         Thread launchThread = new Thread(() -> {
@@ -321,6 +338,9 @@ public class GameLoop {
      * @param port          server TCP port
      * @param cancelledFlag written by {@link MultiplayerConnectScreen#onHide()} to signal abort
      * @param onFailure     called on the GL thread with a human-readable error message
+    * @thread GL-main (caller); spawns worker thread for blocking connect
+    * @gl-state n/a
+    * @see #friendlyErrorMessage(Exception)
      */
     private void connectToMultiplayer(String host, int port, AtomicBoolean cancelledFlag, Consumer<String> onFailure) {
         Thread connectThread = new Thread(() -> {
@@ -373,6 +393,8 @@ public class GameLoop {
      *
      * @param e the exception thrown by {@link ClientNetworkManager#connect()}
      * @return a message short enough to fit the connect screen status line
+        * @thread any
+        * @gl-state n/a
      */
     private static String friendlyErrorMessage(Exception e) {
         String msg = e.getMessage();
@@ -391,6 +413,12 @@ public class GameLoop {
     /**
      * Entry point for the engine. Initializes all systems, runs the loop,
      * then cleans up on exit.
+        *
+        * @thread GL-main
+        * @gl-state n/a
+        * @see #init()
+        * @see #loop()
+        * @see #cleanup()
      */
     public void run() {
         init();
@@ -401,6 +429,9 @@ public class GameLoop {
     /**
      * Initializes all engine subsystems. Window must come first — the OpenGL context
      * must exist before any GL calls.
+        *
+        * @thread GL-main
+        * @gl-state cull=enabled, depth-test=enabled
      */
     private void init() {
         window.init();
@@ -510,6 +541,11 @@ public class GameLoop {
 
     /**
      * The main loop. Runs until the window is closed.
+        *
+        * @thread GL-main
+        * @gl-state context-current
+        * @see #update()
+        * @see #render()
      */
     private void loop() {
         double previousTime    = System.currentTimeMillis();
@@ -584,6 +620,9 @@ public class GameLoop {
     /**
      * Returns true while the key or mouse button bound to {@code action} is held.
      * Returns false if the action is unbound.
+        *
+        * @thread GL-main
+        * @gl-state n/a
      */
     private boolean isActionDown(Action action) {
         int code = settings.getKeyBindings().get(action);
@@ -598,6 +637,9 @@ public class GameLoop {
      * Returns true on the single frame where the key or mouse button bound to
      * {@code action} just transitioned from up to down.
      * Returns false if the action is unbound.
+        *
+        * @thread GL-main
+        * @gl-state n/a
      */
     private boolean wasActionJustPressed(Action action) {
         int code = settings.getKeyBindings().get(action);
@@ -610,6 +652,10 @@ public class GameLoop {
 
     /**
      * Game logic update — called TARGET_UPS times per second.
+        *
+        * @thread GL-main
+        * @gl-state n/a
+        * @see ClientWorld#update()
      */
     private void update() {
         // Drain pending mesh builds from the server's chunk stream.
@@ -738,6 +784,9 @@ public class GameLoop {
 
     /**
      * Renders the current frame: 3D world, block highlight, then 2D HUD.
+        *
+        * @thread GL-main
+        * @gl-state shader=bound during world draw, then shader=unbound
      */
     private void render() {
         // Sky colour tracks the day/night cycle. Falls back to a default blue if no
@@ -781,6 +830,9 @@ public class GameLoop {
      *   <li>In-game, cursor captured → open pause menu</li>
      *   <li>In-game, cursor released → recapture cursor</li>
      * </ul>
+    *
+    * @thread GL-main
+    * @gl-state n/a
      */
     private void handleEscapeKey(long win, int key) {
         if (key != GLFW.GLFW_KEY_ESCAPE) return;
@@ -812,6 +864,10 @@ public class GameLoop {
     /**
      * Disconnects from the current server, clears the world, and returns to the main menu.
      * Must be called on the GL thread — mesh cleanup (GL resource deletion) happens here.
+        *
+        * @thread GL-main
+        * @gl-state n/a
+        * @see ClientWorld#reset()
      */
     private void returnToMainMenu() {
         // Disconnect network first so the server logs a clean player logout
@@ -853,6 +909,8 @@ public class GameLoop {
      * Must be called on the main (GL) thread.
      *
      * @param mode the desired window mode
+        * @thread GL-main
+        * @gl-state n/a
      */
     private void applyWindowMode(GameSettings.WindowMode mode) {
         long monitor = GLFW.glfwGetPrimaryMonitor();
@@ -891,6 +949,8 @@ public class GameLoop {
      * this to lock their widgets.
      *
      * @return true if a server channel is open
+        * @thread any
+        * @gl-state n/a
      */
     public boolean isSessionActive() {
         return serverChannel != null;
@@ -898,6 +958,9 @@ public class GameLoop {
 
     /**
      * Shuts down all engine subsystems in reverse initialization order.
+        *
+        * @thread GL-main
+        * @gl-state resources-destroyed
      */
     private void cleanup() {
         // Disconnect client before stopping server — lets the server log a clean logout

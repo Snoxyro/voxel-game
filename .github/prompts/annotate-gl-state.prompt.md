@@ -1,6 +1,6 @@
 ---
 agent: 'agent'
-tools: ['search/codebase']
+tools: ['search/codebase', 'edit/editFiles']
 description: 'Add GL thread and state annotations to all methods in a high-risk engine file'
 ---
 

@@ -1,6 +1,6 @@
 ---
 agent: 'agent'
-tools: ['search/codebase']
+tools: ['search/codebase', 'edit/editFiles']
 description: 'Identify and annotate all GL/thread-boundary files in the project'
 ---
 

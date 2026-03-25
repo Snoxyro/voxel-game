@@ -22,6 +22,10 @@ public class ShaderProgram {
      * Creates, compiles, and links a shader program from two GLSL source files
      * on the classpath.
      *
+        * @thread GL-main
+        * @gl-state shader=unbound
+        * @see #compileShader(String, int) Called during construction for both shader stages.
+        *
      * @param vertexShaderPath   classpath path to the .vert file
      * @param fragmentShaderPath classpath path to the .frag file
      * @throws RuntimeException if compilation or linking fails
@@ -50,6 +54,10 @@ public class ShaderProgram {
     /**
      * Compiles a single shader stage from a classpath resource file.
      *
+        * @thread GL-main
+        * @gl-state shader=unbound
+        * @see #loadResource(String) Loads GLSL text before compilation.
+        *
      * @param path      classpath path to the GLSL source file
      * @param shaderType GL20.GL_VERTEX_SHADER or GL20.GL_FRAGMENT_SHADER
      * @return the compiled shader's GPU handle
@@ -73,6 +81,9 @@ public class ShaderProgram {
     /**
      * Reads a classpath resource file into a String.
      *
+        * @thread GL-main
+        * @gl-state n/a
+        *
      * @param path classpath-relative path, e.g. "/shaders/default.vert"
      * @return file contents as a String
      */
@@ -91,6 +102,10 @@ public class ShaderProgram {
      * Sets a mat4 uniform variable in the shader program.
      * The program must be bound before calling this.
      *
+        * @thread GL-main
+        * @gl-state shader=bound
+        * @see #bind() Uniform updates are only valid while this program is active.
+        *
      * @param name   the uniform variable name as declared in GLSL
      * @param matrix the JOML matrix to upload
      */
@@ -113,6 +128,10 @@ public class ShaderProgram {
      * Sets a float uniform variable in the shader program.
      * The program must be bound before calling this.
      *
+        * @thread GL-main
+        * @gl-state shader=bound
+        * @see #bind() Uniform updates are only valid while this program is active.
+        *
      * @param name  the uniform variable name as declared in GLSL
      * @param value the float value to set
      */
@@ -128,6 +147,10 @@ public class ShaderProgram {
     /**
      * Sets an integer uniform (also used for sampler uniforms and booleans).
      * The program must be bound before calling this.
+        *
+        * @thread GL-main
+        * @gl-state shader=bound
+        * @see #bind() Uniform updates are only valid while this program is active.
      */
     public void setUniform(String name, int value) {
         int location = GL20.glGetUniformLocation(programId, name);
@@ -141,6 +164,10 @@ public class ShaderProgram {
     /**
      * Sets a boolean uniform. Booleans are set as integers (1=true, 0=false) in GLSL.
      * The program must be bound before calling this.
+        *
+        * @thread GL-main
+        * @gl-state shader=bound
+        * @see #setUniform(String, int) Delegates to integer uniform upload.
      */
     public void setUniform(String name, boolean value) {
         setUniform(name, value ? 1 : 0);
@@ -148,6 +175,9 @@ public class ShaderProgram {
 
     /**
      * Binds this shader program — all subsequent draw calls will use it.
+        *
+        * @thread GL-main
+        * @gl-state shader=unbound
      */
     public void bind() {
         GL20.glUseProgram(programId);
@@ -155,6 +185,9 @@ public class ShaderProgram {
 
     /**
      * Unbinds any active shader program.
+        *
+        * @thread GL-main
+        * @gl-state shader=bound
      */
     public void unbind() {
         GL20.glUseProgram(0);
@@ -162,6 +195,10 @@ public class ShaderProgram {
 
     /**
      * Deletes the shader program from GPU memory. Call on shutdown.
+        *
+        * @thread GL-main
+        * @gl-state shader=bound
+        * @see #unbind() Cleanup unbinds before deleting the program object.
      */
     public void cleanup() {
         unbind();

@@ -113,6 +113,9 @@ public class ClientWorld implements BlockView {
     /**
      * Initializes GL-dependent resources. Must be called on the main thread after
      * the OpenGL context has been created — i.e. after Window.init().
+     *
+     * @thread GL-main
+     * @gl-state creates GL resources for remote player rendering
      */
     public void initRenderResources() {
         remotePlayerRenderer = new RemotePlayerRenderer();
@@ -121,6 +124,9 @@ public class ClientWorld implements BlockView {
     /**
      * Creates a ClientWorld and starts the mesh worker thread pool.
      * Leaves one core for the main/render thread; uses all remaining for meshing.
+     *
+     * @thread GL-main (construction thread)
+     * @gl-state n/a
      */
     public ClientWorld() {
         int workerCount = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
@@ -144,6 +150,8 @@ public class ClientWorld implements BlockView {
      * @param cy        chunk-grid Y
      * @param cz        chunk-grid Z
      * @param blockData Chunk.SERIALIZED_SIZE raw bytes from the server's chunk block array
+     * @thread netty-io
+     * @gl-state n/a
      */
     public void queueChunkData(int cx, int cy, int cz, byte[] blockData) {
         Chunk chunk = Chunk.fromBytes(blockData);
@@ -158,6 +166,8 @@ public class ClientWorld implements BlockView {
      * @param worldY     world-space Y
      * @param worldZ     world-space Z
      * @param blockId block registry ID (0 = AIR)
+      * @thread netty-io
+      * @gl-state n/a
      */
     public void queueBlockChange(int worldX, int worldY, int worldZ, int blockId) {
         pendingBlockChanges.offer(new PendingBlockChange(worldX, worldY, worldZ, blockId));
@@ -169,6 +179,8 @@ public class ClientWorld implements BlockView {
      * @param cx chunk-grid X
      * @param cy chunk-grid Y
      * @param cz chunk-grid Z
+      * @thread netty-io
+      * @gl-state n/a
      */
     public void queueUnload(int cx, int cy, int cz) {
         pendingUnloads.offer(new ChunkPos(cx, cy, cz));
@@ -181,6 +193,8 @@ public class ClientWorld implements BlockView {
      * @param x spawn X
      * @param y spawn Y (feet)
      * @param z spawn Z
+      * @thread netty-io
+      * @gl-state n/a
      */
     public void setSpawn(float x, float y, float z) {
         spawnX = x;
@@ -191,6 +205,9 @@ public class ClientWorld implements BlockView {
     /**
      * Enqueues a remote player spawn received from the server.
      * Thread-safe — called from the Netty I/O thread.
+     *
+     * @thread netty-io
+     * @gl-state n/a
      */
     public void queueRemotePlayerSpawn(int playerId, String username, float x, float y, float z) {
         pendingSpawns.offer(new SpawnData(playerId, username, x, y, z));
@@ -199,6 +216,9 @@ public class ClientWorld implements BlockView {
     /**
      * Enqueues a remote player position update received from the server.
      * Thread-safe — called from the Netty I/O thread.
+     *
+     * @thread netty-io
+     * @gl-state n/a
      */
     public void queueRemotePlayerMove(int playerId, float x, float y, float z) {
         pendingMoves.offer(new MoveData(playerId, x, y, z));
@@ -207,6 +227,9 @@ public class ClientWorld implements BlockView {
     /**
      * Enqueues a remote player despawn received from the server.
      * Thread-safe — called from the Netty I/O thread.
+     *
+     * @thread netty-io
+     * @gl-state n/a
      */
     public void queueRemotePlayerDespawn(int playerId) {
         pendingDespawns.offer(playerId);
@@ -227,6 +250,10 @@ public class ClientWorld implements BlockView {
      *   <li>Submit dirty chunks to mesh workers (with neighbor snapshots).</li>
      *   <li>Drain completed meshes — uploads to GPU.</li>
      * </ol>
+    *
+    * @thread GL-main
+    * @gl-state creates/deletes Mesh GPU resources during queue drains
+    * @see #drainPendingMeshes()
      */
     public void update() {
         drainPendingPlayerEvents();
@@ -331,6 +358,9 @@ public class ClientWorld implements BlockView {
      * at the normal async rate.
      *
      * <p>Must be called on the GL thread (reads the chunk map).
+     *
+     * @thread GL-main
+     * @gl-state n/a (schedules future mesh uploads)
      */
     public void invalidateAllMeshes() {
         dirtyMeshes.addAll(chunks.keySet());
@@ -424,6 +454,8 @@ public class ClientWorld implements BlockView {
      * Called from the Netty I/O thread — safe due to volatile field in WorldTime.
      *
      * @param tick the server-authoritative world tick
+      * @thread netty-io
+      * @gl-state n/a
      */
     public void applyWorldTime(long tick) {
         worldTime.setWorldTick(tick);
@@ -434,6 +466,8 @@ public class ClientWorld implements BlockView {
      * Computed from the most recently received server tick.
      *
      * @return ambient factor in [0.15, 1.0]
+      * @thread GL-main
+      * @gl-state n/a
      */
     public float getAmbientFactor() {
         return worldTime.getAmbientFactor();
@@ -444,6 +478,8 @@ public class ClientWorld implements BlockView {
      * Used to set glClearColor before each frame.
      *
      * @return float[3] RGB in [0.0, 1.0]
+      * @thread GL-main
+      * @gl-state n/a
      */
     public float[] getSkyColor() {
         return worldTime.getSkyColor();
@@ -456,6 +492,8 @@ public class ClientWorld implements BlockView {
     /**
      * {@inheritDoc}
      * Returns {@link Blocks#AIR} for chunks that haven't arrived from the server yet.
+      * @thread GL-main
+      * @gl-state n/a
      */
     @Override
     public BlockType getBlock(int worldX, int worldY, int worldZ) {
@@ -483,6 +521,8 @@ public class ClientWorld implements BlockView {
      * @param projectionMatrix camera projection matrix
      * @param viewMatrix       camera view matrix
      * @return int[2] — [visible chunk count, total mesh count]
+    * @thread GL-main
+    * @gl-state shader=bound (required by caller)
      */
     public int[] render(ShaderProgram shader, Matrix4f projectionMatrix, Matrix4f viewMatrix) {
         FrustumIntersection frustum = new FrustumIntersection(
@@ -510,6 +550,8 @@ public class ClientWorld implements BlockView {
      * {@code useTexture=false} before calling.
      *
      * @param shader the currently bound shader program
+         * @thread GL-main
+         * @gl-state shader=bound, useTexture=false
      */
     public void renderRemotePlayers(ShaderProgram shader) {
             if (remotePlayerRenderer == null) return;
@@ -521,11 +563,10 @@ public class ClientWorld implements BlockView {
     // -------------------------------------------------------------------------
 
     /**
-     * Shuts down mesh worker threads and frees all GPU resources.
-     * Must be called on the main (GL) thread at shutdown.
-     */
-    /**
      * Unloads all chunks and releases all GL mesh resources. Must be called on the GL thread. Used when returning to the main menu.
+      *
+      * @thread GL-main
+      * @gl-state deletes Mesh GPU resources
      */
     public void reset() {
         pendingChunkData.clear();
@@ -547,6 +588,12 @@ public class ClientWorld implements BlockView {
         spawnZ = 64.0f;
     }
 
+    /**
+     * Stops mesh workers and releases all owned GPU resources.
+     *
+     * @thread GL-main
+     * @gl-state deletes Mesh/RemotePlayerRenderer GPU resources
+     */
     public void cleanup() {
         meshExecutor.shutdownNow();
         if (remotePlayerRenderer != null) remotePlayerRenderer.cleanup();
