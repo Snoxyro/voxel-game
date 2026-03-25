@@ -102,8 +102,7 @@ settings.properties            ← User settings (created at runtime)
 ```
 
 ## Development Log
-See [DEVLOG.md](DEVLOG.md) for a chronological record of progress,
-decisions, and lessons learned — including honest notes on AI assistance.
+See [DEVLOG.md](DEVLOG.md) for active record and [DEVLOG_ARCHIVE.md](DEVLOG_ARCHIVE.md) for chronological record of; progress, decisions, and lessons learned — including honest notes on AI assistance.
 
 ## Phases
 - [x] Phase 0 — Foundation

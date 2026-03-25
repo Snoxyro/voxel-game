@@ -233,7 +233,7 @@ Missing any one silently drops the packet.
 ### Context File Maintenance (REQUIRED)
 After every session that makes meaningful progress, the following files MUST be updated
 before giving the commit message. Do not wait to be asked:
-- **DEVLOG.md** — add a new entry for everything done this session
+- **DEVLOG.md** — add a new entry for everything done this session (Current and future phase entries only; archive is append-only)
 - **CLAUDE.md** — update package structure, phase status, architecture decisions if changed
 - **README.md** — update phase checklist, controls, package overview if changed
 - **.github/copilot-instructions.md** — update current phase, key constraints if changed
@@ -241,8 +241,10 @@ before giving the commit message. Do not wait to be asked:
 This is mandatory. Stale context files defeat the purpose of having them.
 
 ### Always Read DEVLOG.md First
-Check DEVLOG.md for the latest progress before responding. It contains the full
-history of decisions, bugs encountered, and current state.
+Check DEVLOG.md for the latest progress before responding. It contains current phase
+and onward — decisions, bugs, and current state.
+DEVLOG_ARCHIVE.md holds Phase 0–5 history. Do not read it by default — only
+consult it when explicitly asked about a historical decision from a completed phase.
 
 ### GL Thread Safety is Critical
 If any code in `server/` or `game/` (World, ServerWorld, etc.) imports or calls
