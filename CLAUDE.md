@@ -228,6 +228,28 @@ Missing any one silently drops the packet.
 ./gradlew clean build                      # Clean build
 ```
 
+### 14. Cross-File State Dependencies
+These are the non-obvious states that span multiple files. Violating them causes silent
+bugs or crashes with no useful stack trace.
+
+- **`ChunkMesher.aoEnabled`** — `public static volatile boolean`. Written by GL thread
+  via `GameLoop.applySettings()`. Read by worker threads in `ChunkMesher.mesh()`. Any
+  change must call `clientWorld.invalidateAllMeshes()` — only when the value actually
+  changes, not unconditionally.
+
+- **`GameLoop.applySettings()` is the single authority for pushing settings to GPU.**
+  It calls `shaderProgram.setUniform("u_brightnessFloor", ...)`, `camera.setFov()`,
+  `window.setVSync()`, etc. If a new setting needs a GL call, it goes here — nowhere else.
+
+- **`ClientWorld.processDirtyMeshes()` worker lambda order is fixed:**
+  `LightEngine.computeChunkLight()` → `ChunkMesher.mesh()` → result posted to main thread
+  for `new Mesh(vertices)`. Never swap the order; never move `new Mesh()` to the worker.
+
+- **`World.renderDistanceH` is a live mutable field** (not a constant). Every read must
+  use `world.getRenderDistanceH()`. `ServerWorld.setRenderDistance()` delegates to
+  `world.setRenderDistance()`. `GameLoop.applySettings()` calls
+  `activeServer.setRenderDistance()`. No other call site should exist.
+
 ## Important Notes for Claude
 
 ### Context File Maintenance (REQUIRED)
@@ -237,6 +259,9 @@ before giving the commit message. Do not wait to be asked:
 - **CLAUDE.md** — update package structure, phase status, architecture decisions if changed
 - **README.md** — update phase checklist, controls, package overview if changed
 - **.github/copilot-instructions.md** — update current phase, key constraints if changed
+- If a new Java file was created or an existing file significantly refactored in
+  `engine/`, `game/World.java`, `game/ChunkMesher.java`, or `client/ClientWorld.java`,
+  flag at session end: "⚠️ Run /annotate-gl-state on [filename] before next session."
 
 This is mandatory. Stale context files defeat the purpose of having them.
 

@@ -1461,6 +1461,46 @@ deferring it one phase costs nothing. BFS data layout (lightData nibble arrays,
 
 ---
 
+## Entry 054 — Workflow: Context System Improvements
+**Date:** 26.03.2026
+**Phase:** 6 — Meta / Workflow
+
+### What Was Done
+- Created `DEVLOG_ARCHIVE.md`: Phase 0–5 entries (001–047) moved there.
+  DEVLOG.md now contains Phase 6+ only (~400 lines vs 3000+).
+- Added `## CURRENT STATE` header to top of DEVLOG.md for RAG pinning.
+- Updated CLAUDE.md:
+  - "Always Read DEVLOG.md First" clarified to mention archive.
+  - Context File Maintenance list updated with archive note.
+  - Added Section 14: Cross-File State Dependencies (GameLoop/ClientWorld/
+    ChunkMesher/World state boundaries documented for RAG retrieval).
+  - Maintenance rule now explicitly covers Section 14 updates.
+- Updated system prompt to reflect DEVLOG_ARCHIVE existence.
+- Created `.github/prompts/annotate-gl-state.prompt.md` — reusable Copilot
+  agent prompt that adds @thread / @gl-state / @see Javadoc annotations to
+  any high-risk engine file.
+- Created `.github/prompts/annotate-gl-state-triage.prompt.md` — one-time
+  prompt that scans the entire repo and applies annotations to all files
+  meeting the GL/thread-boundary criteria.
+
+### Why
+RAG blind spots caused occasional "wrong method assumed" errors — most notably
+applySettings() GL state assumptions being missed when only render() chunk was
+retrieved. The annotation system embeds state context directly into each method's
+Javadoc so any retrieved chunk carries its own dependency information.
+
+### Decisions Made
+- Annotation maintenance is triggered by Claude at session end, not manually.
+  CLAUDE.md Section 14 is the authority for cross-file dependencies.
+- Only 6 files qualify for annotation: GameLoop, ClientWorld, ChunkMesher,
+  World, ServerWorld, ShaderProgram. All others skipped.
+
+### AI Assistance Notes
+- Entire workflow redesign done with Claude based on analysis of RAG blind spot patterns.
+- Copilot will handle the actual annotation execution via triage prompt.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 
