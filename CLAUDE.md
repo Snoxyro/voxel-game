@@ -298,8 +298,11 @@ to replace, and provide the full replacement block. The codebase is large enough
     - **6B-6 (done):** In-game pause menu — overlay, Resume / Settings / Main Menu / Quit
     - **6B-theme (done):** UI Theme system — UiTheme abstract class, DarkTheme, LightTheme
     - **6B-7 (done):** Full settings system — GameSettings, KeyBindings, Action, SettingsScreen
-  - **6C (next):** Lighting + Day/Night Cycle — skylight propagation, block light foundation,
-    sun cycle, ambient light.
+  - **6C (in progress):** Lighting + Day/Night Cycle
+    - **6C-1/2/3 (done):** LightEngine, vertex light baking, shader integration
+    - **6C-4 (next):** Brightness slider + AO toggle settings
+    - **6C-5:** Day/night cycle (WorldTime, ambientFactor uniform, server packet)
+    - **6C-6:** Skylight recompute on block place/break
   - **6D:** Entity System + Player Model — entity framework, skeletal player model,
     item drop entities. Nametags above player models deferred to here.
   - **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.

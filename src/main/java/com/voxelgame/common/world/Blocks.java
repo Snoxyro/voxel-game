@@ -38,13 +38,13 @@ public final class Blocks {
         // REGISTRATION ORDER IS PERMANENT. APPEND ONLY. NEVER REORDER.
         // AIR must be first — ID 0 matches Chunk's zero-initialised array.
         // ---------------------------------------------------------------
-        AIR   = BlockRegistry.register("air",   false, 0, 0, 0);
+        AIR   = BlockRegistry.register("air",   false, 0, 0, 0, 0);
         GRASS = BlockRegistry.register("grass", true,
-                TextureLayers.LAYER_GRASS_TOP, TextureLayers.LAYER_GRASS_SIDE, TextureLayers.LAYER_DIRT);
+                TextureLayers.LAYER_GRASS_TOP, TextureLayers.LAYER_GRASS_SIDE, TextureLayers.LAYER_DIRT, 0);
         DIRT  = BlockRegistry.register("dirt",  true,
-                TextureLayers.LAYER_DIRT, TextureLayers.LAYER_DIRT, TextureLayers.LAYER_DIRT);
+                TextureLayers.LAYER_DIRT, TextureLayers.LAYER_DIRT, TextureLayers.LAYER_DIRT, 0);
         STONE = BlockRegistry.register("stone", true,
-                TextureLayers.LAYER_STONE, TextureLayers.LAYER_STONE, TextureLayers.LAYER_STONE);
+                TextureLayers.LAYER_STONE, TextureLayers.LAYER_STONE, TextureLayers.LAYER_STONE, 0);
     }
 
     /**

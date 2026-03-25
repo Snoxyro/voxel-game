@@ -49,13 +49,12 @@ public final class BlockRegistry {
      * @param topTextureLayer    {@link TextureLayers} layer index for the top face
      * @param sideTextureLayer   {@link TextureLayers} layer index for the side faces
      * @param bottomTextureLayer {@link TextureLayers} layer index for the bottom face
+     * @param lightEmission      light level emitted (0–15); 0 for non-luminous blocks
      * @return the newly created and registered {@link BlockType}
      * @throws IllegalArgumentException if {@code name} is already registered
      */
     public static synchronized BlockType register(String name, boolean solid,
-                                                   int topTextureLayer,
-                                                   int sideTextureLayer,
-                                                   int bottomTextureLayer) {
+        int topTextureLayer, int sideTextureLayer, int bottomTextureLayer, int lightEmission) {
         if (byName.containsKey(name)) {
             throw new IllegalArgumentException("BlockRegistry: duplicate block name: " + name);
         }
@@ -68,7 +67,7 @@ public final class BlockRegistry {
         }
 
         BlockType type = new BlockType(nextId, name, solid,
-                topTextureLayer, sideTextureLayer, bottomTextureLayer);
+                topTextureLayer, sideTextureLayer, bottomTextureLayer, lightEmission);
         byId[nextId] = type;
         byName.put(name, type);
         nextId++;

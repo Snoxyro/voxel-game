@@ -30,24 +30,23 @@ public final class BlockType {
     private final int    bottomTextureLayer;
 
     /**
-     * Package-private — only {@link BlockRegistry} constructs block types.
-     *
-     * @param id                unique registry ID, assigned sequentially from 0
-     * @param name              unique string identifier (e.g. {@code "grass"})
-     * @param solid             {@code true} if this block is physically solid and renders geometry
-     * @param topTextureLayer   texture array layer for the top face
-     * @param sideTextureLayer  texture array layer for the N/S/E/W side faces
-     * @param bottomTextureLayer texture array layer for the bottom face
+     * Light level emitted by this block (0–15). 0 = no light.
+     * Non-zero values are used as the seed level for block-light BFS propagation.
+     * All current vanilla blocks emit 0; reserved for torches, lava, glowstone, etc.
      */
-    BlockType(int id, String name, boolean solid,
-              int topTextureLayer, int sideTextureLayer, int bottomTextureLayer) {
+    private final int    lightEmission;
+
+    BlockType(int id, String name, boolean solid, int topTextureLayer, int sideTextureLayer,
+        int bottomTextureLayer, int lightEmission) {
         this.id                 = id;
         this.name               = name;
         this.solid              = solid;
         this.topTextureLayer    = topTextureLayer;
         this.sideTextureLayer   = sideTextureLayer;
         this.bottomTextureLayer = bottomTextureLayer;
+        this.lightEmission      = lightEmission;
     }
+
 
     /**
      * Returns the unique numeric ID assigned by the registry.
@@ -95,6 +94,15 @@ public final class BlockType {
      * @return texture array layer index ≥ 0
      */
     public int bottomTextureLayer() { return bottomTextureLayer; }
+
+    /**
+     * Returns the light level emitted by this block type (0–15).
+     * 0 means this block produces no light. Non-zero values are used as the
+     * initial propagation level when BFS light spreading is computed.
+     *
+     * @return emission level in [0, 15]
+     */
+    public int getLightEmission() { return lightEmission; }
 
     @Override
     public String toString() {

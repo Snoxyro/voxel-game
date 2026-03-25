@@ -110,6 +110,22 @@ public class ShaderProgram {
     }
 
     /**
+     * Sets a float uniform variable in the shader program.
+     * The program must be bound before calling this.
+     *
+     * @param name  the uniform variable name as declared in GLSL
+     * @param value the float value to set
+     */
+    public void setUniform(String name, float value) {
+        int location = GL20.glGetUniformLocation(programId, name);
+        if (location == -1) {
+            System.err.println("Warning: uniform '" + name + "' not found in shader program.");
+            return;
+        }
+        GL20.glUniform1f(location, value);
+    }
+
+    /**
      * Sets an integer uniform (also used for sampler uniforms and booleans).
      * The program must be bound before calling this.
      */

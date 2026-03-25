@@ -14,12 +14,13 @@ import java.nio.IntBuffer;
  *
  * <h3>Vertex layout</h3>
  * <pre>
- *   [x, y, z, r, g, b, u, v, layer] — 9 floats, 36 bytes per vertex.
+ *   [x, y, z, r, g, b, u, v, layer, light] — 10 floats, 40 bytes per vertex.
  *
- *   Attribute slot 0 — position  (vec3,  offset  0)
- *   Attribute slot 1 — color     (vec3,  offset 12)   AO+directional shade, greyscale
- *   Attribute slot 2 — texCoord  (vec2,  offset 24)   UV in tile units (0→w, 0→h)
- *   Attribute slot 3 — texLayer  (float, offset 32)   texture array layer index
+ *   Attribute slot 0 — position   (vec3,  offset  0)
+ *   Attribute slot 1 — color      (vec3,  offset 12)  AO + directional shade, greyscale
+ *   Attribute slot 2 — texCoord   (vec2,  offset 24)  UV in tile units (0→w, 0→h)
+ *   Attribute slot 3 — texLayer   (float, offset 32)  texture array layer index
+ *   Attribute slot 4 — lightLevel (float, offset 36)  gamma-mapped light in [0, 1]
  * </pre>
  *
  * <h3>UV tiling</h3>
@@ -34,8 +35,8 @@ import java.nio.IntBuffer;
  */
 public class Mesh {
 
-    /** Number of floats per vertex: position(3) + color(3) + uv(2) + layer(1). */
-    private static final int FLOATS_PER_VERTEX = 9;
+    /** Number of floats per vertex: position(3) + color(3) + uv(2) + layer(1) + light(1). */
+    private static final int FLOATS_PER_VERTEX = 10;
 
     /** Vertices emitted per quad by ChunkMesher (two triangles, corners duplicated). */
     private static final int VERTS_PER_QUAD_IN  = 6;
@@ -121,6 +122,7 @@ public class Mesh {
         GL20.glEnableVertexAttribArray(0);
 
         // Attribute 1 — color: 3 floats at byte offset 12
+        // Carries AO darkening and directional shading baked at mesh-build time.
         GL20.glVertexAttribPointer(1, 3, GL11.GL_FLOAT, false, STRIDE, 3 * Float.BYTES);
         GL20.glEnableVertexAttribArray(1);
 
@@ -133,6 +135,13 @@ public class Mesh {
         // nearest integer layer index when sampling the array.
         GL20.glVertexAttribPointer(3, 1, GL11.GL_FLOAT, false, STRIDE, 8 * Float.BYTES);
         GL20.glEnableVertexAttribArray(3);
+
+        // Attribute 4 — lightLevel: 1 float at byte offset 36
+        // Gamma-mapped light value in [0.0, 1.0]: pow(0.8, 15 - level).
+        // Combines skylight and block light — the higher channel wins.
+        // Multiplied with texture color and vertex AO in the fragment shader.
+        GL20.glVertexAttribPointer(4, 1, GL11.GL_FLOAT, false, STRIDE, 9 * Float.BYTES);
+        GL20.glEnableVertexAttribArray(4);
 
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL30.glBindVertexArray(0);

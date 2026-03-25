@@ -6,6 +6,7 @@ import com.voxelgame.common.world.BlockType;
 import com.voxelgame.common.world.Blocks;
 import com.voxelgame.common.world.Chunk;
 import com.voxelgame.common.world.ChunkPos;
+import com.voxelgame.common.world.LightEngine;
 import com.voxelgame.engine.Mesh;
 import com.voxelgame.engine.ShaderProgram;
 import com.voxelgame.game.ChunkMesher;
@@ -340,6 +341,9 @@ public class ClientWorld implements BlockView {
             meshInProgress.add(pos);
             final ChunkPos fPos = pos; // effectively final for lambda
             meshExecutor.submit(() -> {
+                // Light must be computed before meshing — the mesher reads light levels
+                // from the chunk when baking per-vertex brightness (6C-3 and beyond).
+                LightEngine.computeChunkLight(chunk, fPos, neighborSnapshot);
                 float[] vertices = ChunkMesher.mesh(chunk, fPos, neighborSnapshot);
                 pendingMeshes.offer(new PendingMesh(fPos, vertices));
             });

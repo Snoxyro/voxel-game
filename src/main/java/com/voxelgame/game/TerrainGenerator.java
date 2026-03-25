@@ -144,16 +144,21 @@ public class TerrainGenerator {
 
         // Early exit: chunk is entirely above the highest possible surface
         if (chunkWorldY > MAX_SURFACE_Y) {
-            return new Chunk(); // all air by default
+            // Entirely above the surface — every block is air in direct sunlight.
+            Chunk chunk = new Chunk();
+            chunk.fillAllSkyLight(15);
+            return chunk;
         }
 
         // Early exit: chunk is entirely below the lowest possible surface
         if (chunkWorldYTop < MIN_SURFACE_Y) {
+            // Entirely below the minimum surface — all stone, no sky light (default 0).
             Chunk chunk = new Chunk();
             for (int x = 0; x < Chunk.SIZE; x++)
                 for (int y = 0; y < Chunk.SIZE; y++)
                     for (int z = 0; z < Chunk.SIZE; z++)
                         chunk.setBlock(x, y, z, Blocks.STONE);
+            // lightData stays all-zero — correct for fully underground chunks.
             return chunk;
         }
 
@@ -189,6 +194,15 @@ public class TerrainGenerator {
             }
         }
 
+        // Fill column sky light using the heightmap we already computed.
+        // This is a second pass over the same XZ columns — O(SIZE²×SIZE) total,
+        // same order as the block fill loop above.
+        for (int x = 0; x < Chunk.SIZE; x++) {
+            for (int z = 0; z < Chunk.SIZE; z++) {
+                chunk.fillColumnSkyLight(x, z, heightmap[x * Chunk.SIZE + z], chunkWorldY);
+            }
+        }
+
         return chunk;
     }
 
@@ -202,6 +216,50 @@ public class TerrainGenerator {
      */
     public void evictColumn(int cx, int cz) {
         heightmapCache.remove(packColumnKey(cx, cz));
+    }
+
+    /**
+     * Fills the sky light channel of a chunk that was loaded from disk.
+     * Generated chunks have sky light filled during {@link #generateChunk};
+     * disk-loaded chunks must call this separately because sky light is not
+     * serialised (it is fully deterministic from block data + world seed).
+     *
+     * <p>Uses the same heightmap cache as {@link #generateChunk} — if the
+     * column was recently generated the heightmap is already warm. If not,
+     * it is computed here and cached for subsequent Y slices.
+     *
+     * <p>Called from {@link com.voxelgame.game.World#submitToExecutor} on the
+     * generation executor thread, so disk I/O and sky light computation both
+     * run off the main thread.
+     *
+     * @param chunk the already-deserialised chunk to fill sky light into
+     * @param pos   the chunk's 3D grid position
+     */
+    public void fillSkyLight(Chunk chunk, ChunkPos pos) {
+        int chunkWorldY    = pos.worldY();
+        int chunkWorldYTop = chunkWorldY + Chunk.SIZE - 1;
+
+        if (chunkWorldY > MAX_SURFACE_Y) {
+            // Entire chunk above surface — full sky everywhere.
+            chunk.fillAllSkyLight(15);
+            return;
+        }
+
+        if (chunkWorldYTop < MIN_SURFACE_Y) {
+            // Entire chunk underground — sky stays 0 (already the default).
+            return;
+        }
+
+        // Surface-band: use the heightmap (compute + cache if needed).
+        long columnKey = packColumnKey(pos.x(), pos.z());
+        int[] heightmap = heightmapCache.computeIfAbsent(columnKey,
+                k -> buildHeightmap(pos.x(), pos.z()));
+
+        for (int x = 0; x < Chunk.SIZE; x++) {
+            for (int z = 0; z < Chunk.SIZE; z++) {
+                chunk.fillColumnSkyLight(x, z, heightmap[x * Chunk.SIZE + z], chunkWorldY);
+            }
+        }
     }
 
     /**

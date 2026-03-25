@@ -3226,6 +3226,88 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
+## Entry 051 — Phase 6C-1/2/3: Lighting Foundation
+**Date:** 25.03.2026
+**Phase:** 6 — Foundation for extensibility (6C)
+
+### What Was Done
+
+#### 6C-1 — Light data storage
+- Added `lightEmission` field (0–15) to `BlockType`. Package-private constructor
+  updated. `BlockRegistry.register()` gained a 6-parameter overload; existing
+  5-parameter overload defaults emission to 0 — no callers changed.
+- Added `byte[] lightData` to `Chunk` (4096 bytes, one byte per block, packed nibbles:
+  high = skylight 0–15, low = block light 0–15). Added `MAX_LIGHT = 15` constant.
+- Added `getSkyLight`, `setSkyLight`, `getBlockLight`, `setBlockLight`, `getMaxLight`,
+  `clearLight` methods to `Chunk`.
+
+#### 6C-2 — LightEngine
+- Created `LightEngine.java` in `common/world/`. Static utility, no state.
+- `computeChunkLight(chunk, pos, neighbors)` — calls `clearLight()`, then
+  `computeBlockLight()` (seeds emission values), then `computeSkyLight()`.
+- Skylight is column-only top-down: scans each X/Z column from Y=15 to Y=0.
+  Checks chunk above via neighbor snapshot for whether sky enters at the top.
+  Solid blocks absorb sky (hasSky=false), air passes it through.
+- Block light seeds each emissive block's own position. No propagation — full
+  BFS deferred to Phase 8. Data layout is upgrade-compatible.
+- `LightEngine.computeChunkLight()` called in `ClientWorld.processDirtyMeshes()`
+  worker lambda, before `ChunkMesher.mesh()`.
+
+#### 6C-3 — Mesher integration and shader changes
+- `ChunkMesher` vertex layout expanded from 9 to 10 floats per vertex.
+  New 10th float: `brightness = pow(0.8, 15 - light)` — gamma-mapped face light.
+- Added `FACE_LIGHT_OFFSET` table and `getLightAt` / `getLightForFace` helpers
+  to `ChunkMesher`. Face light reads from the open-air neighbor block on the
+  exposed side of each face.
+- `packMask` expanded: bits 25–28 now store face light level (0–15).
+- `buildMergedQuads` expanded: result array is 10 ints per quad, extracts light
+  at index 9. Light is included in the merge condition — faces with different
+  light levels cannot be greedy-merged.
+- `emitQuad` gained `int light` parameter. Computes `brightness` once per quad,
+  emits as 10th float on every vertex in both normal and flipped branches.
+- All six face methods updated: `getLightForFace` called before `packMask`,
+  `light` passed through to `emitQuad`. Loop stride changed from 9 to 10.
+- `ensureCapacity` calls updated from 54 to 60.
+- `Mesh.java` `FLOATS_PER_VERTEX` updated 9→10. Attribute slot 4 added
+  (lightLevel, offset 36 bytes).
+- `default.vert` — added `layout(location=4) in float lightLevel`, passes
+  `vertLight` to fragment shader.
+- `default.frag` — multiplies fragment color by `clamp(vertLight + u_brightnessFloor, 0, 1)`
+  when `useTexture=true`. Added `u_brightnessFloor` uniform (default 0.0).
+  Untextured geometry (highlight, player boxes) bypasses light entirely.
+- `ShaderProgram.java` — added `setUniform(String, float)` overload.
+
+### Decisions Made
+- Column-only skylight first, BFS-ready data layout. Upgradeable in Phase 8.
+- `u_brightnessFloor` uniform is wired but not yet connected to settings — caves
+  are currently pitch black. Brightness slider setting is next (6C-4).
+- Light included in greedy merge condition via `packMask` bits 25–28. Prevents
+  incorrect brightness interpolation across merged quads with different light levels.
+- `pow(0.8, 15 - level)` gamma curve: perceptually uniform steps, 16 levels
+  visually smooth.
+
+### Problems Encountered
+- Geometry corruption (black lines): `buildMergedQuads` still allocated `* 9` and
+  only wrote 9 values per quad after face methods were updated to read 10. Fixed.
+- `emitQuad` `int light` parameter was placed at wrong position in signature.
+  Identified via Copilot inspection of updated call sites. Fixed.
+
+### Lessons / Observations
+- When expanding a packed format, every layer that reads or writes it must be
+  updated atomically: `packMask` → `buildMergedQuads` → face method loop stride →
+  `emitQuad` signature → vertex emission body. Missing any one layer produces
+  silent data corruption visible only as geometry scrambling.
+- The stride mismatch (9 vs 10 floats) produced the exact "exploded geometry"
+  artifact: position floats were being read from color/UV slots.
+
+### Remaining in 6C
+- 6C-4: `u_brightnessFloor` → brightness slider in `GameSettings` + `SettingsScreen`
+- 6C-5: AO toggle in settings (triggers full async remesh)
+- 6C-6: Day/night cycle (`WorldTime`, `u_ambientFactor` uniform, server→client packet)
+- 6C-7: Skylight recompute on block place/break
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

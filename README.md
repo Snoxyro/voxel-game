@@ -155,7 +155,7 @@ decisions, and lessons learned — including honest notes on AI assistance.
     - [x] 6B-theme — UI Theme system (UiTheme, DarkTheme, LightTheme)
     - [x] Multiplayer bug fixes (chunk load order, block-in-hitbox, per-player streaming, player visibility)
     - [x] 6B-7 — Full settings system (GameSettings, KeyBindings, Action, SettingsScreen)
-  - [ ] 6C — Lighting + Day/Night Cycle
+  - [ ] 6C — Lighting + Day/Night Cycle (foundation done, brightness/day-night remaining)
   - [ ] 6D — Entity System + Player Model (nametags deferred to here)
   - [ ] 6E — Items + Inventory
 - [ ] Phase 7 — Modding API

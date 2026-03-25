@@ -130,9 +130,13 @@ Phase 6 — Foundation for extensibility. Phase 6B complete. Next: 6C Lighting.
   - SettingsScreen — tabbed UI (Gameplay/Graphics/Display/Controls/Keybinds/Sound)
   - Live render distance, live FOV/VSync/theme/window mode on save
   - Multiplayer bugs fixed: chunk load order, block-in-hitbox, per-player streaming, visibility
+- 6C (in progress): Lighting + Day/Night Cycle
+  - 6C-1/2/3 (done): LightEngine, vertex light baking, shader integration
+  - 6C-4 (next): Brightness slider + AO toggle settings
+  - 6C-5: Day/night cycle (WorldTime, ambientFactor uniform, server packet)
+  - 6C-6: Skylight recompute on block place/break
 
-### After 6B
-- 6C: Lighting + Day/Night Cycle
+### After 6C:
 - 6D: Entity System + Player Model (nametags deferred to here)
 - 6E: Items + Inventory
 - Phase 7: Modding API

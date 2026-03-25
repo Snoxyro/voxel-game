@@ -542,13 +542,17 @@ public class World implements BlockView {
         // Capture storage reference — lambda must not access mutable instance state
         final ChunkStorage storageRef = this.storage;
         generationExecutor.submit(() -> {
-            // Check disk first. If a save file exists, deserialize it instead of
-            // running terrain generation. Both paths produce the same Chunk type —
-            // the rest of the pipeline (pendingChunks → drainPendingChunks) is identical.
             byte[] saved = storageRef != null ? storageRef.load(pos) : null;
-            Chunk chunk = (saved != null)
-                ? Chunk.fromBytes(saved)
-                : terrainGenerator.generateChunk(pos);
+            Chunk chunk;
+            if (saved != null) {
+                // Restore from disk. Sky light is not serialised — recompute it
+                // from the heightmap so lighting matches newly generated chunks.
+                chunk = Chunk.fromBytes(saved);
+                terrainGenerator.fillSkyLight(chunk, pos);
+            } else {
+                // Generate fresh terrain. generateChunk() fills sky light internally.
+                chunk = terrainGenerator.generateChunk(pos);
+            }
             pendingChunks.offer(new PendingChunk(pos, chunk));
         });
     }
