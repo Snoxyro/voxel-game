@@ -40,11 +40,10 @@ public class Chunk {
     private static final int VOLUME = SIZE * SIZE * SIZE;
 
     /**
-     * Byte length of the serialised chunk. Each block is 2 bytes (big-endian short
-     * registry ID), so this is {@link #VOLUME} × 2 = 8192.
-     * Used by {@link #toBytes()}, {@link #fromBytes(byte[])}, and network packets.
+     * Byte length of the serialised chunk. 
+     * 8192 bytes for blocks (VOLUME * Short.BYTES) + 4096 bytes for light (VOLUME) = 12288 bytes.
      */
-    public static final int SERIALIZED_SIZE = VOLUME * Short.BYTES; // 8192
+    public static final int SERIALIZED_SIZE = (VOLUME * Short.BYTES) + VOLUME;
 
     /** Maximum value for either light channel (skylight or block light). */
     public static final int MAX_LIGHT = 15;
@@ -100,6 +99,26 @@ public class Chunk {
         this.lightData = new byte[VOLUME];
         // Zero-initialised: all sky=0, block=0.
         // TerrainGenerator fills sky light immediately after block generation.
+    }
+
+    // -------------------------------------------------------------------------
+    // World-coordinate conversion utilities
+    // -------------------------------------------------------------------------
+
+    public static int worldToChunk(int worldCoord) {
+        return Math.floorDiv(worldCoord, SIZE);
+    }
+
+    public static int worldToLocal(int worldCoord) {
+        return Math.floorMod(worldCoord, SIZE);
+    }
+
+    public static ChunkPos worldToChunkPos(int wx, int wy, int wz) {
+        return new ChunkPos(
+            worldToChunk(wx),
+            worldToChunk(wy),
+            worldToChunk(wz)
+        );
     }
 
     /**
@@ -334,35 +353,16 @@ public class Chunk {
         return Math.max(packed >> 4, packed & 0x0F);
     }
 
-    /**
-     * Serialises this chunk's block array to a {@code byte[]} of exactly
-     * {@link #SERIALIZED_SIZE} bytes.
-     *
-     * <p>Each block is stored as a big-endian unsigned short (2 bytes) containing
-     * its registry ID. Format: {@code [id0_high][id0_low][id1_high][id1_low]...}
-     *
-     * <p>Used for both network transmission ({@code ChunkDataPacket}) and disk
-     * persistence ({@code FlatFileChunkStorage}). The two share the same format
-     * intentionally — received chunk data can be written to disk with no conversion.
-     *
-     * @return 8192-byte serialised block array
-     */
     public byte[] toBytes() {
         ByteBuffer buf = ByteBuffer.allocate(SERIALIZED_SIZE).order(ByteOrder.BIG_ENDIAN);
         for (short id : blocks) {
             buf.putShort(id);
         }
+        // Append the packed light bytes directly after the block data
+        buf.put(getLightBytes());
         return buf.array();
     }
 
-    /**
-     * Deserialises a chunk from a {@code byte[]} produced by {@link #toBytes()}.
-     * Rebuilds {@code solidCount} and Y occupancy bounds from scratch.
-     *
-     * @param data byte array of exactly {@link #SERIALIZED_SIZE} bytes
-     * @return the reconstructed chunk
-     * @throws IllegalArgumentException if {@code data.length != SERIALIZED_SIZE}
-     */
     public static Chunk fromBytes(byte[] data) {
         if (data.length != SERIALIZED_SIZE) {
             throw new IllegalArgumentException(
@@ -371,16 +371,20 @@ public class Chunk {
         Chunk chunk = new Chunk();
         ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN);
         for (int i = 0; i < VOLUME; i++) {
-            // readShort() reads signed; & 0xFFFF gives unsigned ID value
             int id = buf.getShort() & 0xFFFF;
-            if (id != 0) { // skip AIR (id 0) — array is already all zeros
-                // Reconstruct x, y, z from flat index i = x*SIZE*SIZE + y*SIZE + z
+            if (id != 0) { 
                 int x =  i / (SIZE * SIZE);
                 int y = (i / SIZE) % SIZE;
                 int z =  i % SIZE;
                 chunk.setBlock(x, y, z, BlockRegistry.getById(id));
             }
         }
+        
+        // Read the remaining 4096 bytes into the light arrays
+        byte[] lightData = new byte[VOLUME];
+        buf.get(lightData);
+        chunk.setLightBytes(lightData);
+        
         return chunk;
     }
 
@@ -392,5 +396,20 @@ public class Chunk {
      */
     public void clearLight() {
         Arrays.fill(lightData, (byte) 0);
+    }
+
+    /**
+     * Retrieves the packed light array for network transmission.
+     */
+    public byte[] getLightBytes() {
+        return lightData;
+    }
+
+    /**
+     * Applies a compressed network byte array directly into the chunk's light storage.
+     */
+    public void setLightBytes(byte[] newLightData) {
+        if (newLightData == null || newLightData.length != VOLUME) return;
+        System.arraycopy(newLightData, 0, this.lightData, 0, VOLUME);
     }
 }

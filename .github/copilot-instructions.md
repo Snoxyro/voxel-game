@@ -177,6 +177,16 @@ Phase 6 — Foundation for extensibility. 6A, 6B, and 6C complete. Next: 6D Enti
 - Do not revert World.update() to a single-viewer signature — it accepts
   List<World.ViewerInfo> and that is a locked architecture decision
 
+**Constraints given by gemini, ignore for now. Will be edited later.**
+  ## Key Constraints
+- Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`
+- GL calls on main thread only — never pass GL calls to worker or Netty threads
+- Chunk mesh generation on worker threads; `new Mesh(vertices)` on main thread only
+- `Chunk.SERIALIZED_SIZE` is **12288 bytes** (8192 bytes for short[] blocks, 4096 bytes for byte[] lightData).
+- The server runs a strict **State Machine**. Chunks must pass through `generatedChunks` -> `lightScheduled` -> `lightReady` -> `networkScheduled`. `ServerWorld` must only transmit chunks if `world.isChunkReadyForNetwork(pos)` is true.
+- Block interaction uses **Client-Side Prediction**. `GameLoop` must call `clientWorld.setBlock()` instantly to trigger a local synchronous mesh+light update before sending a network packet.
+- Generation queues must use **Pure Radial Sorting**. Look-direction bias starves the State Machine collars.
+
 ## What NOT to Do
 - Do not suggest switching to Maven
 - Do not suggest Vulkan (OpenGL 4.5 is current target)

@@ -59,11 +59,33 @@ public class ClientWorld implements BlockView {
     private record SpawnData(int playerId, String username, float x, float y, float z) {}
     private record MoveData(int playerId, float x, float y, float z) {}
 
+    private final java.util.concurrent.atomic.AtomicLong chunkSequence = new java.util.concurrent.atomic.AtomicLong();
+    private final Map<ChunkPos, Long> arrivalTickets = new ConcurrentHashMap<>();
+
+    // The server only sends chunks within this vertical radius
+    private static final int RENDER_DISTANCE_V = 8;
+
+    // Limits how many completed meshes are uploaded to the GPU per frame to prevent frame drops during heavy chunk updates
+    private static final int MAX_MESH_UPLOADS_PER_FRAME = 40;
+
+    // Limits how many tasks are sent to the thread pool to prevent the internal queue from backing up
+    private static final int MAX_ACTIVE_MESH_TASKS = 128;
+    
+    private final Set<ChunkPos> dirtyMeshesSet = new HashSet<>();
+    private final PriorityQueue<ChunkPos> dirtyMeshesQueue = new PriorityQueue<>(
+        Comparator.comparingLong(p -> arrivalTickets.getOrDefault(p, Long.MAX_VALUE))
+    );
+
     // -------------------------------------------------------------------------
     // Chunk and mesh storage — main (GL) thread only
     // -------------------------------------------------------------------------
-    private final Map<ChunkPos, Chunk> chunks = new HashMap<>();
+    private final Map<ChunkPos, Chunk> chunks = new ConcurrentHashMap<>();
     private final Map<ChunkPos, Mesh>  meshes = new HashMap<>();
+
+    // Dedicated background threads for BFS calculations
+    private final Queue<Mesh> meshesToCleanup = new ArrayDeque<>();
+    private final ThreadPoolExecutor meshExecutor;  
+    private final Set<ChunkPos> meshScheduled = new HashSet<>();
 
     // -------------------------------------------------------------------------
     // Cross-thread queues — written by Netty/worker threads, drained by main thread
@@ -99,7 +121,7 @@ public class ClientWorld implements BlockView {
     private volatile float spawnY = 70.0f;
     private volatile float spawnZ = 64.0f;
 
-    private final ExecutorService meshExecutor;
+    private int currentCenterCY = 0;
 
     /** Carrier for a chunk arrival from the network. Chunk is pre-converted from bytes. */
     private record PendingChunkData(ChunkPos pos, Chunk chunk) {}
@@ -109,6 +131,14 @@ public class ClientWorld implements BlockView {
 
     /** Carrier for a server-authoritative block change. Applied on the main thread. */
     private record PendingBlockChange(int worldX, int worldY, int worldZ, int blockId) {}
+
+    private void promoteToMeshIfReady(ChunkPos pos) {
+        if (!chunks.containsKey(pos) || meshScheduled.contains(pos)) return;
+        if (canMesh(pos)) {
+            meshScheduled.add(pos);
+            enqueueDirtyMesh(pos);
+        }
+    }
 
     /**
      * Initializes GL-dependent resources. Must be called on the main thread after
@@ -129,11 +159,12 @@ public class ClientWorld implements BlockView {
      * @gl-state n/a
      */
     public ClientWorld() {
-        int workerCount = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
-        meshExecutor = Executors.newFixedThreadPool(workerCount, r -> {
-            Thread t = new Thread(r, "client-mesher");
-            t.setDaemon(true);
-            return t;
+        int available = Runtime.getRuntime().availableProcessors();
+        int workerCount = Math.max(1, (available - 1) / 2);
+
+        meshExecutor = new ThreadPoolExecutor(workerCount, workerCount, 0L, TimeUnit.MILLISECONDS,
+            new PriorityBlockingQueue<>(), r -> {
+                Thread t = new Thread(r, "client-mesher"); t.setDaemon(true); return t;
         });
     }
 
@@ -155,7 +186,9 @@ public class ClientWorld implements BlockView {
      */
     public void queueChunkData(int cx, int cy, int cz, byte[] blockData) {
         Chunk chunk = Chunk.fromBytes(blockData);
-        pendingChunkData.offer(new PendingChunkData(new ChunkPos(cx, cy, cz), chunk));
+        ChunkPos pos = new ChunkPos(cx, cy, cz);
+        arrivalTickets.put(pos, chunkSequence.getAndIncrement());
+        pendingChunkData.offer(new PendingChunkData(pos, chunk));
     }
 
     /**
@@ -255,7 +288,10 @@ public class ClientWorld implements BlockView {
     * @gl-state creates/deletes Mesh GPU resources during queue drains
     * @see #drainPendingMeshes()
      */
-    public void update() {
+    public void update(float cameraY) {
+        // Keep track of the chunk the player is currently standing in
+        currentCenterCY = Math.floorDiv((int) cameraY, Chunk.SIZE);
+
         drainPendingPlayerEvents();
         drainPendingBlockChanges();
         drainPendingChunkData();
@@ -295,27 +331,7 @@ public class ClientWorld implements BlockView {
         PendingBlockChange change;
         while ((change = pendingBlockChanges.poll()) != null) {
             BlockType block = BlockRegistry.getById(change.blockId());
-
-            int cx = Math.floorDiv(change.worldX(), Chunk.SIZE);
-            int cy = Math.floorDiv(change.worldY(), Chunk.SIZE);
-            int cz = Math.floorDiv(change.worldZ(), Chunk.SIZE);
-            ChunkPos pos = new ChunkPos(cx, cy, cz);
-
-            Chunk chunk = chunks.get(pos);
-            if (chunk == null) continue; // chunk not loaded client-side — ignore
-
-            chunk.setBlock(
-                Math.floorMod(change.worldX(), Chunk.SIZE),
-                Math.floorMod(change.worldY(), Chunk.SIZE),
-                Math.floorMod(change.worldZ(), Chunk.SIZE),
-                block
-            );
-
-            // Dirty-mark this chunk and any face-adjacent neighbors the modified block touches.
-            // A block at local coordinate 0 or SIZE-1 sits on a chunk boundary — the neighbor's
-            // mesh needs updating too because it may have been emitting a face toward that block.
-            dirtyMeshes.add(pos);
-            markNeighborsDirty(pos);
+            applyBlockChange(change.worldX(), change.worldY(), change.worldZ(), block);
         }
     }
 
@@ -323,16 +339,16 @@ public class ClientWorld implements BlockView {
         PendingChunkData pending;
         while ((pending = pendingChunkData.poll()) != null) {
             ChunkPos pos = pending.pos();
-
-            // If replacing an existing chunk (server resent it), dirty-mark neighbors
-            // so their boundary faces are corrected even if the chunk data is the same.
             chunks.put(pos, pending.chunk());
 
-            // Mark this chunk and its 6 face-adjacent neighbors dirty.
-            // Neighbors need remeshing because their boundary faces toward this chunk
-            // may have been treating it as air (if this is a new arrival).
-            dirtyMeshes.add(pos);
-            markNeighborsDirty(pos);
+            // The chunk arrived fully lit. Check if it unlocks meshing for itself or neighbors.
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        promoteToMeshIfReady(new ChunkPos(pos.x() + dx, pos.y() + dy, pos.z() + dz));
+                    }
+                }
+            }
         }
     }
 
@@ -340,13 +356,40 @@ public class ClientWorld implements BlockView {
         ChunkPos pos;
         while ((pos = pendingUnloads.poll()) != null) {
             chunks.remove(pos);
-            Mesh mesh = meshes.remove(pos);
-            if (mesh != null) mesh.cleanup(); // GL call — safe, we're on the main thread
+            arrivalTickets.remove(pos);
+            meshScheduled.remove(pos);
+            
+            if (dirtyMeshesSet.remove(pos)) {
+                dirtyMeshesQueue.remove(pos);
+            }
 
-            // Neighbors may have emitted faces toward this chunk; they need remeshing
-            // to reveal the now-exposed boundary faces.
-            markNeighborsDirty(pos);
+            Mesh mesh = meshes.remove(pos);
+            if (mesh != null) meshesToCleanup.add(mesh);
         }
+
+        int glCleanups = 0;
+        Mesh m;
+        while (glCleanups < 100 && (m = meshesToCleanup.poll()) != null) {
+            m.cleanup();
+            glCleanups++;
+        }
+    }
+
+    private boolean canMesh(ChunkPos pos) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) continue;
+                    ChunkPos n = new ChunkPos(pos.x() + dx, pos.y() + dy, pos.z() + dz);
+                    if (!chunks.containsKey(n)) {
+                        // Bypass missing chunks if they are beyond bedrock or the vertical render distance
+                        if (n.y() < 0 || Math.abs(n.y() - currentCenterCY) > RENDER_DISTANCE_V) continue;
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     /**
@@ -363,47 +406,53 @@ public class ClientWorld implements BlockView {
      * @gl-state n/a (schedules future mesh uploads)
      */
     public void invalidateAllMeshes() {
-        dirtyMeshes.addAll(chunks.keySet());
+        for (ChunkPos p : chunks.keySet()) {
+            enqueueDirtyMesh(p);
+        }
     }
 
     private void processDirtyMeshes() {
-        Iterator<ChunkPos> it = dirtyMeshes.iterator();
-        while (it.hasNext()) {
-            ChunkPos pos = it.next();
+        List<ChunkPos> deferred = new ArrayList<>();
+        
+        while (meshInProgress.size() < MAX_ACTIVE_MESH_TASKS) {
+            ChunkPos pos = dirtyMeshesQueue.poll();
+            if (pos == null) break; 
+            
+            dirtyMeshesSet.remove(pos);
 
-            // Chunk was unloaded while dirty — no longer relevant
-            if (!chunks.containsKey(pos)) {
-                it.remove();
+            if (!chunks.containsKey(pos)) continue;
+
+            // CRITICAL FIX: If a chunk is busy, defer it so the dirty flag isn't permanently deleted
+            if (meshInProgress.contains(pos)) {
+                deferred.add(pos);
                 continue;
             }
-
-            // Already being meshed — leave the dirty mark. Once the in-flight result
-            // drains and clears meshInProgress, this position is picked up next frame.
-            if (meshInProgress.contains(pos)) continue;
-
-            it.remove();
 
             Chunk chunk = chunks.get(pos);
             Map<ChunkPos, Chunk> neighborSnapshot = captureNeighbors(pos);
 
             meshInProgress.add(pos);
-            final ChunkPos fPos = pos; // effectively final for lambda
-            meshExecutor.submit(() -> {
-                // Light must be computed before meshing — the mesher reads light levels
-                // from the chunk when baking per-vertex brightness (6C-3 and beyond).
-                LightEngine.computeChunkLight(chunk, fPos, neighborSnapshot);
+            final ChunkPos fPos = pos; 
+            long ticket = arrivalTickets.getOrDefault(pos, Long.MAX_VALUE);
+            
+            meshExecutor.execute(new PriorityTask(ticket, () -> {
                 float[] vertices = ChunkMesher.mesh(chunk, fPos, neighborSnapshot);
                 pendingMeshes.offer(new PendingMesh(fPos, vertices));
-            });
+            }));
+        }
+        
+        // Put busy chunks back in line for the next frame
+        for (ChunkPos p : deferred) {
+            enqueueDirtyMesh(p);
         }
     }
 
     private void drainPendingMeshes() {
+        int uploaded = 0;
         PendingMesh pending;
-        while ((pending = pendingMeshes.poll()) != null) {
+        while (uploaded < MAX_MESH_UPLOADS_PER_FRAME && (pending = pendingMeshes.poll()) != null) {
             meshInProgress.remove(pending.pos());
 
-            // Chunk may have been unloaded while meshing was in-flight — discard
             if (!chunks.containsKey(pending.pos())) continue;
 
             Mesh old = meshes.remove(pending.pos());
@@ -412,20 +461,7 @@ public class ClientWorld implements BlockView {
             if (pending.vertices().length > 0) {
                 meshes.put(pending.pos(), new Mesh(pending.vertices()));
             }
-        }
-    }
-
-    private void markNeighborsDirty(ChunkPos pos) {
-        ChunkPos[] adjacent = {
-            new ChunkPos(pos.x() - 1, pos.y(), pos.z()),
-            new ChunkPos(pos.x() + 1, pos.y(), pos.z()),
-            new ChunkPos(pos.x(), pos.y() - 1, pos.z()),
-            new ChunkPos(pos.x(), pos.y() + 1, pos.z()),
-            new ChunkPos(pos.x(), pos.y(), pos.z() - 1),
-            new ChunkPos(pos.x(), pos.y(), pos.z() + 1),
-        };
-        for (ChunkPos n : adjacent) {
-            if (chunks.containsKey(n)) dirtyMeshes.add(n);
+            uploaded++;
         }
     }
 
@@ -442,7 +478,9 @@ public class ClientWorld implements BlockView {
                     if (dx == 0 && dy == 0 && dz == 0) continue;
                     ChunkPos n = new ChunkPos(pos.x() + dx, pos.y() + dy, pos.z() + dz);
                     Chunk c = chunks.get(n);
-                    if (c != null) neighbors.put(n, c);
+                    if (c != null) {
+                        neighbors.put(n, c);
+                    }
                 }
             }
         }
@@ -602,6 +640,82 @@ public class ClientWorld implements BlockView {
         chunks.clear();
     }
 
+    /**
+     * Public endpoint for Client-Side Prediction. Instantly updates local memory,
+     * recalculates light, and rebuilds the mesh without waiting for the server.
+     */
+    public void setBlock(int worldX, int worldY, int worldZ, BlockType block) {
+        applyBlockChange(worldX, worldY, worldZ, block);
+    }
+
+    private void applyBlockChange(int worldX, int worldY, int worldZ, BlockType block) {
+        int cx = Math.floorDiv(worldX, Chunk.SIZE);
+        int cy = Math.floorDiv(worldY, Chunk.SIZE);
+        int cz = Math.floorDiv(worldZ, Chunk.SIZE);
+        ChunkPos pos = new ChunkPos(cx, cy, cz);
+
+        Chunk chunk = chunks.get(pos);
+        if (chunk == null) return;
+
+        int lx = Math.floorMod(worldX, Chunk.SIZE);
+        int ly = Math.floorMod(worldY, Chunk.SIZE);
+        int lz = Math.floorMod(worldZ, Chunk.SIZE);
+
+        BlockType oldBlock = chunk.getBlock(lx, ly, lz);
+        
+        // PREDICTION BYPASS: If the block is already the requested type, ignore it.
+        // This prevents double-meshing when the server echoes back our predicted action.
+        if (oldBlock.getId() == block.getId()) return; 
+
+        chunk.setBlock(lx, ly, lz, block);
+
+        Set<ChunkPos> lightChanged;
+        boolean wasOpaque = oldBlock.isOpaque();
+        boolean isOpaque  = block.isOpaque();
+
+        if (!wasOpaque && isOpaque) {
+            lightChanged = LightEngine.propagateAfterPlace(chunks, worldX, worldY, worldZ);
+        } else if (wasOpaque && !isOpaque) {
+            lightChanged = LightEngine.propagateAfterBreak(chunks, worldX, worldY, worldZ);
+        } else {
+            lightChanged = Collections.emptySet();
+        }
+
+        // Group the central chunk, any chunk with altered light, and their immediate physical neighbors
+        Set<ChunkPos> syncMeshGroup = new HashSet<>(lightChanged);
+        syncMeshGroup.add(pos);
+
+        int[][] dirs = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+        Set<ChunkPos> boundaryNeighbors = new HashSet<>();
+        for (ChunkPos lp : syncMeshGroup) {
+            for (int[] d : dirs) {
+                boundaryNeighbors.add(new ChunkPos(lp.x() + d[0], lp.y() + d[1], lp.z() + d[2]));
+            }
+        }
+        syncMeshGroup.addAll(boundaryNeighbors);
+
+        // Mesh all affected chunks synchronously on the main thread to prevent the "see-through" visual gap
+        for (ChunkPos p : syncMeshGroup) {
+            Chunk c = chunks.get(p);
+            if (c == null) continue;
+
+            pendingMeshes.removeIf(pending -> pending.pos().equals(p));
+
+            Map<ChunkPos, Chunk> snap = captureNeighbors(p);
+            float[] verts = ChunkMesher.mesh(c, p, snap);
+
+            Mesh old = meshes.remove(p);
+            if (old != null) old.cleanup();
+
+            if (verts.length > 0) meshes.put(p, new Mesh(verts));
+
+            // Clean these from the background queues so the worker pool ignores them
+            dirtyMeshes.remove(p);
+            dirtyMeshesQueue.remove(p);
+            meshInProgress.remove(p);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Getters
     // -------------------------------------------------------------------------
@@ -614,4 +728,29 @@ public class ClientWorld implements BlockView {
 
     /** @return spawn Z received from server, or 64.0 if not yet received */
     public float getSpawnZ() { return spawnZ; }
+
+    // Helper method to keep both collections in sync
+    private void enqueueDirtyMesh(ChunkPos pos) {
+        if (dirtyMeshesSet.add(pos)) {
+            dirtyMeshesQueue.add(pos);
+        }
+    }
+
+    private static class PriorityTask implements Runnable, Comparable<PriorityTask> {
+        final long ticket;
+        final Runnable action;
+
+        PriorityTask(long ticket, Runnable action) {
+            this.ticket = ticket;
+            this.action = action;
+        }
+
+        @Override
+        public void run() { action.run(); }
+
+        @Override
+        public int compareTo(PriorityTask o) {
+            return Long.compare(this.ticket, o.ticket);
+        }
+    }
 }

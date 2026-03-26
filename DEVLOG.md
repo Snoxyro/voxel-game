@@ -1501,6 +1501,80 @@ Javadoc so any retrieved chunk carries its own dependency information.
 
 ---
 
+## Entry 055 — Pure Radial Chunk Loading & State Machine Limits
+**Date:** 26.03.2026
+**Phase:** 6 — Foundation for extensibility (6C)
+
+### What Was Done
+- Fixed a major bug where chunks were loaded into memory but remained completely invisible unless the player interacted with them or flew high into the sky. 
+- Root Cause: The client's Radius-Based State Machine (`hasCompleteNetworkCollar` and `hasCompleteLightCollar`) demanded a strict 3x3x3 collar of neighbors. Chunks at `y = 0` infinitely waited for neighbors at `y = -1` (which the server never generates).
+- Added boundary awareness `isOutsideGenerationLimits` to bypass missing neighbors that fall outside the physical bedrock/sky limits.
+- **Removed Look-Direction Bias:** Removed the 75/25 look-direction generation bias in `World.java`. Replaced it with pure radial distance loading (concentric rings).
+- **Radius Padding:** Padded the server's chunk generation and streaming bounds by `+2` chunks (`RENDER_DISTANCE_H + 2` and `RENDER_DISTANCE_V + 2`). 
+
+### Decisions Made
+- Look-direction bias fundamentally starves a Radius-Based State Machine. When a narrow "tube" of chunks is sent to the client, none of them have their lateral neighbors, causing the pipeline to freeze and leaving the background threads idle. Pure radial loading feeds the state machine exactly what it needs (concentric rings) to instantly process light and meshes.
+- Padding the generation radius by 2 chunks allows the server to hold a "buffer ring" so the client's visible render distance perfectly matches the setting without clipping the outer two layers.
+
+### Problems Encountered
+- **The Ceiling Deadlock:** Padding the vertical generation limit caused a garbage-collection loop. `isInRange` was deleting the newly generated ceiling chunks instantly because its bounds were not padded, which permanently paralyzed the chunks below them. Fixed by padding both horizontal and vertical limits in `isInRange`.
+
+### AI Assistance Notes
+- As Claude greatly failed the development of light system twice, Gemini (gemini 3.1 pro) was used for everything in this part.
+
+---
+
+## Entry 056 — Server-Side Lighting & The Server State Machine
+**Date:** 26.03.2026
+**Phase:** 6 — Foundation for extensibility (6C)
+
+### What Was Done
+- Shifted absolute lighting authority from the client to the server to support future core mechanics (mob spawning, crop growth). 
+- Updated `Chunk.java` serialization. `getLightBytes()` and `setLightBytes()` now pack/unpack the 4096-byte `lightData` array directly into the network buffer. `SERIALIZED_SIZE` increased from 8192 to 12288 bytes (4KB blocks + 8KB lighting arrays).
+- **The Server State Machine:** Re-architected `World.java` to use a 2-stage state machine to prevent "dark seams". 
+  - **Stage 1:** Raw blocks are generated and placed into `generatedChunks`. The server waits for a 3x3x3 collar of raw chunks before submitting the center chunk to the background `LightEngine`.
+  - **Stage 2:** Fully lit chunks are placed into `lightReady`. The server waits for a 3x3x3 collar of lit chunks before promoting the center chunk to `networkScheduled`.
+- Updated `ServerWorld.streamChunksToPlayer` to only transmit chunks if `world.isChunkReadyForNetwork(pos)` is true.
+- Completely removed `lightExecutor`, `promoteToLightIfReady`, and all initial lighting logic from `ClientWorld.java`. Newly downloaded chunks bypass light calculation and go straight to meshing.
+
+### Decisions Made
+- **Server Authority:** The server must run the state machine, not the client. If the server computes light immediately upon generation without waiting for neighbors, light will not bleed across chunk borders, resulting in a checkerboard of dark seams.
+- **Compressed Lighting:** Sky light (4 bits) and block light (4 bits) are successfully packed into a single 4096-byte array, halving the network overhead of transmitting lighting.
+
+### Problems Encountered
+- **The Old Save File Crash:** After expanding the chunk byte length to 12KB, the engine experienced a silent background thread crash on launch. The `WorldMeta` storage system was loading old 8KB chunks from disk, causing `Chunk.fromBytes` to throw a length mismatch exception. Because the exception was swallowed by the thread pool, 88 spawn chunks vanished, deadlocking the state machine and leaving a perfectly rectangular hole at spawn. 
+- *Fix:* Deleted the `worlds/default` folder to force a fresh generation of 12KB chunks.
+
+### AI Assistance Notes
+- As Claude greatly failed the development of light system twice, Gemini (gemini 3.1 pro) was used for everything in this part.
+
+---
+
+## Entry 057 — Client-Side Prediction (Zero-Latency Block Edits)
+**Date:** 26.03.2026
+**Phase:** 6 — Foundation for extensibility (6C)
+
+### What Was Done
+- Implemented Client-Side Prediction to eliminate network ping latency during block placement and breaking.
+- Extracted the localized BFS light recalculation and synchronous chunk meshing from `ClientWorld.drainPendingBlockChanges` into a public `setBlock` method.
+- Updated `GameLoop.update()` to instantly call `clientWorld.setBlock()` to locally modify the world *before* sending the `BlockBreakPacket` or `BlockPlacePacket` to the server.
+- Added a Prediction Bypass guard: `if (oldBlock.getId() == block.getId()) return;`. When the server eventually echoes the action back via a `BlockChangePacket`, the client sees the block is already correct and silently drops the packet, saving CPU cycles.
+- Added a Ghost Block prevention scrub: `pendingMeshes.removeIf()` purges stale asynchronous meshes waiting in the background queue whenever a synchronous block edit occurs.
+
+### Decisions Made
+- Instant visual feedback is critical for game feel. Client-Side Prediction allows the player to see block and shadow changes instantly, while the server maintains ultimate authority and can issue correction packets if an illegal move is detected.
+
+### Problems Encountered
+- **The Ghost Block Race Condition:** If a background thread was actively building a mesh for a chunk right before the player broke a block in it, the stale "pre-break" mesh would arrive moments later and overwrite the local prediction, causing the broken block to pop back into existence. Fixed via the `removeIf` scrubber.
+
+### AI Assistance Notes
+- As Claude greatly failed the development of light system twice, Gemini (gemini 3.1 pro) was used for everything in this part.
+
+### NOTE FROM DEVELOPER (IMPORTANT):
+- Gemini violated many rules i used with Claude. It didn't add comments where it needed to, it didn't followed the `CLAUDE.md` properly and most likely broke some architectural constratint/rule/design or whatever. In short: It probably did something bad, but Claude wasn't working so i chose the easiest way out. My bad, noting this here so we can fix whatever headache this causes later.
+
+---
+
 <!-- 
 DEVLOG TEMPLATE — copy this block for each new entry:
 

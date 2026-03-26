@@ -15,7 +15,7 @@ layout (location = 3) in float texLayer;
 // Combines skylight and block light — whichever is higher wins at mesh-build time.
 // Only set for terrain chunks. For untextured geometry (highlight, player boxes),
 // this attribute is unbound and reads as 0.0 — handled in the fragment shader.
-layout (location = 4) in float lightLevel;
+layout (location = 4) in vec2 lightLevel;
 
 // Uniforms — set from Java once per frame before drawing.
 uniform mat4 projectionMatrix;
@@ -24,7 +24,7 @@ uniform mat4 modelMatrix;
 
 out vec3 vertColor;
 out vec3 fragTexCoord;  // xy = UV in tile units, z = layer index
-out float vertLight;
+out vec2 vertLight;
 
 void main() {
     vertColor    = color;

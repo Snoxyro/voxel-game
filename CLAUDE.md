@@ -152,11 +152,12 @@ a bug and will crash natively on the server thread with no useful Java stack tra
 - Netty I/O threads only write to `ConcurrentLinkedQueue` instances — never touch
   GL resources or chunk maps directly.
 
-### 4. Chunk Mesh Pipeline
-1. Block change / chunk arrival → dirty-mark chunk + face neighbors
-2. `processDirtyMeshes()` (main thread) → captures neighbor snapshot → submits to `meshExecutor`
-3. Worker thread: `LightEngine.computeChunkLight()` → `ChunkMesher.mesh()` → result queued
-4. Main thread drains results → `new Mesh(vertices)` → stored in `meshes` map
+### 4. Chunk Mesh Pipeline (Server-Authoritative Lighting)
+1. **Server State Machine:** `World.java` generates raw terrain → waits for 3x3x3 neighbor collar → background thread computes BFS light (`LightEngine`) → waits for 3x3x3 lit collar → marks ready for network.
+2. **Network Transmission:** `ServerWorld` streams the 12KB chunk (4KB blocks, 4KB packed light data) to the client.
+3. **Client Arrival:** Chunk arrives fully lit. `ClientWorld` immediately dirties it and its neighbors for meshing.
+4. **Mesh Worker:** `processDirtyMeshes()` captures neighbor snapshot → submits to `meshExecutor`.
+5. **GPU Upload:** Main thread drains results → `new Mesh(vertices)`.
 
 ### 5. Block Registry
 `BlockRegistry` is a static registry with append-only registration order.
@@ -165,14 +166,13 @@ ID 0 = AIR is a permanent contract — `Chunk` zero-initialises its `short[]` to
 Never reorder existing registrations — it corrupts save files and in-flight packets.
 
 ### 6. Light System
-`Chunk` stores `byte[] lightData` — 4096 bytes, packed nibbles (high = skylight 0–15,
-low = block light 0–15). `LightEngine.computeChunkLight()` runs column-only skylight
-(top-down, checks chunk above for sky entry) and seeds block light from
-`BlockType.getLightEmission()`. No BFS propagation yet — deferred to Phase 7.
-Data layout is fully BFS-compatible; only the propagation algorithm changes.
-`ChunkMesher` reads face light via `getLightForFace()` and bakes `pow(0.8, 15-level)`
-as a float into vertex slot 4. The fragment shader applies `u_brightnessFloor`
-(additive floor, settings-driven) and `u_ambientFactor` (multiplicative, day/night).
+Lighting is **Server-Authoritative**. `Chunk` stores `byte[] lightData` — 4096 bytes, 
+packed nibbles (high = skylight 0–15, low = block light 0–15). Chunks serialize to 12,288 bytes.
+The server coordinates initial lighting calculations using a 2-stage State Machine to ensure 
+flawless boundary bleeding before transmission. To prevent latency, the client utilizes 
+**Client-Side Prediction**: local block edits trigger instant synchronous localized BFS updates 
+(`setBlock`) before transmitting the action to the server. The client ignores the server's echo 
+packet if the state already matches.
 
 ### 7. Day/Night Cycle
 `WorldTime` lives in `common/world/`. Server owns one instance, ticks it every server
@@ -315,10 +315,11 @@ to replace, and provide the full replacement block. Full copy-pasteable blocks o
   - **6A (done):** Block Registry
   - **6B (done):** Menu / UI System (full tabbed settings, all screens)
   - **6C (done):** Lighting + Day/Night Cycle
-    - LightEngine, vertex brightness baking, shader uniforms
-    - Brightness slider, AO toggle, async remesh on toggle
-    - WorldTime, day/night sky color + ambient factor, WorldTimePacket sync
-    - Skylight recompute on block change (automatic via dirty-mark pipeline)
+    - Server-side authoritative lighting + 12KB packed byte serialization
+    - Server-side Radius-Based State Machine for flawless border bleeding
+    - Client-side prediction for zero-latency block interactions
+    - Vertex brightness baking in ChunkMesher (pow(0.8, 15-level) gamma curve)
+    - Day/night sky color + ambient factor, WorldTimePacket sync
   - **6D (next):** Entity System + Player Model — entity framework, skeletal player
     model, item drop entities. Nametags deferred to here.
   - **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.

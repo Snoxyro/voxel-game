@@ -2,7 +2,7 @@
 
 in vec3 vertColor;
 in vec3 fragTexCoord;   // xy = UV in tile units, z = texture array layer index
-in float vertLight;     // gamma-mapped light level from vertex shader
+in vec2 vertLight;     // gamma-mapped light level from vertex shader
 
 // The GL_TEXTURE_2D_ARRAY bound to texture unit 0.
 uniform sampler2DArray texArray;
@@ -27,19 +27,17 @@ uniform float u_ambientFactor;
 out vec4 fragColor;
 
 void main() {
-    // For untextured geometry (block highlight, player boxes), their VAOs do not
-    // set attribute 4, so vertLight arrives as 0.0. Bypassing light for useTexture=false
-    // keeps those renderers unaffected by the lighting system.
-    float light = useTexture
-        ? clamp(vertLight + u_brightnessFloor, 0.0, 1.0)
-        : 1.0;
+    float light = 1.0;
 
     if (useTexture) {
-        // Sample the tile at the given UV (GL_REPEAT handles tiling) and layer.
-        // Multiply by vertColor (AO + directional shading), light level, and the
-        // day/night ambient factor.
+        // Apply ambient darkening ONLY to sky light, then take the highest light source available
+        float combinedLight = max(vertLight.x * u_ambientFactor, vertLight.y);
+        light = clamp(combinedLight + u_brightnessFloor, 0.0, 1.0);
+    }
+
+    if (useTexture) {
         vec4 texSample = texture(texArray, fragTexCoord);
-        fragColor = vec4(texSample.rgb * vertColor * light * u_ambientFactor, texSample.a);
+        fragColor = vec4(texSample.rgb * vertColor * light, texSample.a);
     } else {
         fragColor = vec4(vertColor, 1.0);
     }

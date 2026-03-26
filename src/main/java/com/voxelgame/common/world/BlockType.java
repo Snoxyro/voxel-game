@@ -74,6 +74,23 @@ public final class BlockType {
     public boolean isSolid() { return solid; }
 
     /**
+     * Returns {@code true} if this block is fully opaque — light cannot pass through it.
+     *
+     * <p>Currently equivalent to {@link #isSolid()} because every registered block is
+     * either fully opaque (stone, grass, dirt) or fully transparent (air). When
+     * transparent blocks arrive (glass, water, leaves), they will be solid for physics
+     * but non-opaque for light. At that point this method will diverge from
+     * {@code isSolid()} and will be backed by a separate {@code opaque} field in the
+     * constructor.
+     *
+     * <p>The BFS light engine uses this as its propagation stop condition: an opaque block
+     * absorbs all incoming light and cannot receive or re-emit propagated light.
+     *
+     * @return {@code true} for light-blocking blocks
+     */
+    public boolean isOpaque() { return solid; }
+
+    /**
      * Returns the {@link TextureLayers} layer index for the top face.
      * Only meaningful on the client; the server never calls this.
      *

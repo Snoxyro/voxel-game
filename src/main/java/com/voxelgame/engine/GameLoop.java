@@ -579,7 +579,7 @@ public class GameLoop {
                     // block changes and remote player moves queue up on Netty threads and
                     // must be applied every frame regardless of menu state.
                     // Player input and movement are intentionally skipped while paused.
-                    clientWorld.update();
+                    clientWorld.update(camera.getPosition().y);
                 } else if (!screenManager.hasActiveScreen()) {
                     update();
                 }
@@ -662,7 +662,7 @@ public class GameLoop {
         // This is the only ClientWorld call in update — the server drives chunk
         // loading, not the client. clientWorld.update() processes incoming chunks
         // and uploads finalized meshes to the GPU.
-        clientWorld.update();
+        clientWorld.update(camera.getPosition().y);
 
         inputHandler.update();
 
@@ -767,14 +767,31 @@ public class GameLoop {
         // --- Block interaction ---
         if (cursorCaptured && lastRaycast.hit()) {
             if (wasActionJustPressed(Action.BREAK_BLOCK)) {
-                if (serverChannel != null) serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockBreakPacket(
-                    lastRaycast.blockX(), lastRaycast.blockY(), lastRaycast.blockZ()));
+                int bx = lastRaycast.blockX();
+                int by = lastRaycast.blockY();
+                int bz = lastRaycast.blockZ();
+
+                // 1. Client-Side Prediction: Apply block change and light update locally instantly
+                clientWorld.setBlock(bx, by, bz, Blocks.AIR);
+
+                // 2. Transmit action to the server for authoritative validation
+                if (serverChannel != null) {
+                    serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockBreakPacket(bx, by, bz));
+                }
             }
             if (wasActionJustPressed(Action.PLACE_BLOCK)) {
-                int px = lastRaycast.placeX(), py = lastRaycast.placeY(), pz = lastRaycast.placeZ();
+                int px = lastRaycast.placeX();
+                int py = lastRaycast.placeY();
+                int pz = lastRaycast.placeZ();
+
                 if (freecam || !player.getBody().overlapsBlock(px, py, pz)) {
-                    if (serverChannel != null) serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockPlacePacket(
-                        px, py, pz, selectedBlock.getId()));
+                    // 1. Client-Side Prediction: Apply block change and light update locally instantly
+                    clientWorld.setBlock(px, py, pz, selectedBlock);
+
+                    // 2. Transmit action to the server for authoritative validation
+                    if (serverChannel != null) {
+                        serverChannel.writeAndFlush(new com.voxelgame.common.network.packets.BlockPlacePacket(px, py, pz, selectedBlock.getId()));
+                    }
                 }
             }
         }

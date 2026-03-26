@@ -36,7 +36,7 @@ import java.nio.IntBuffer;
 public class Mesh {
 
     /** Number of floats per vertex: position(3) + color(3) + uv(2) + layer(1) + light(1). */
-    private static final int FLOATS_PER_VERTEX = 10;
+    private static final int FLOATS_PER_VERTEX = 11;
 
     /** Vertices emitted per quad by ChunkMesher (two triangles, corners duplicated). */
     private static final int VERTS_PER_QUAD_IN  = 6;
@@ -47,7 +47,7 @@ public class Mesh {
     /** Indices per quad — two triangles × 3 indices = 6. */
     private static final int INDICES_PER_QUAD   = 6;
 
-    /** Byte stride between the start of consecutive vertices: 9 floats × 4 bytes. */
+    /** Byte stride between the start of consecutive vertices: 11 floats × 4 bytes. */
     private static final int STRIDE = FLOATS_PER_VERTEX * Float.BYTES;
 
     private final int vaoId;
@@ -136,11 +136,8 @@ public class Mesh {
         GL20.glVertexAttribPointer(3, 1, GL11.GL_FLOAT, false, STRIDE, 8 * Float.BYTES);
         GL20.glEnableVertexAttribArray(3);
 
-        // Attribute 4 — lightLevel: 1 float at byte offset 36
-        // Gamma-mapped light value in [0.0, 1.0]: pow(0.8, 15 - level).
-        // Combines skylight and block light — the higher channel wins.
-        // Multiplied with texture color and vertex AO in the fragment shader.
-        GL20.glVertexAttribPointer(4, 1, GL11.GL_FLOAT, false, STRIDE, 9 * Float.BYTES);
+        // Attribute 4 — lightLevel: 2 floats at byte offset 36 (vec2 skyLight, blockLight)
+        GL20.glVertexAttribPointer(4, 2, GL11.GL_FLOAT, false, STRIDE, 9 * Float.BYTES);
         GL20.glEnableVertexAttribArray(4);
 
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);

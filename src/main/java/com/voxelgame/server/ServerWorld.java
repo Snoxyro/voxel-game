@@ -192,8 +192,8 @@ public class ServerWorld {
      *
      * @param player the player to update
      * @param loaded the set of currently loaded chunk positions in the world
-    * @thread server-tick
-    * @gl-state n/a
+     * @thread server-tick
+     * @gl-state n/a
      */
     private void streamChunksToPlayer(PlayerSession player, Set<ChunkPos> loaded) {
         // Compute the player's current chunk-space position for distance sorting.
@@ -207,8 +207,12 @@ public class ServerWorld {
         // then sort from nearest to farthest chunk position.
         List<ChunkPos> toSend = new ArrayList<>();
         for (ChunkPos pos : loaded) {
-            if (!player.hasChunk(pos)) toSend.add(pos);
+            // INTEGRATION: Only queue chunks that have completely passed the Server State Machine
+            if (!player.hasChunk(pos) && world.isChunkReadyForNetwork(pos)) {
+                toSend.add(pos);
+            }
         }
+        
         // Apply the same 75/25 bias used by World.tickGenerationQueue:
         // chunks in the player's look direction jump the queue, but all chunks
         // eventually stream regardless of look direction.

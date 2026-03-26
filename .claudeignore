@@ -1,0 +1,15 @@
+# Build artifacts — never relevant
+build/
+.gradle/
+out/
+
+# Massive noise utility — pure math, no architecture relevance
+src/main/java/com/voxelgame/util/OpenSimplex2S.java
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+
+# Assets — not Java logic
+src/main/resources/textures/

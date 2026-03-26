@@ -34,6 +34,15 @@ import java.util.concurrent.*;
  */
 public class World implements BlockView {
 
+    // State Machine Tracking Sets
+    private final Set<ChunkPos> generatedChunks = ConcurrentHashMap.newKeySet();
+    private final Set<ChunkPos> lightScheduled = ConcurrentHashMap.newKeySet();
+    private final Set<ChunkPos> lightReady = ConcurrentHashMap.newKeySet();
+    private final Set<ChunkPos> networkScheduled = ConcurrentHashMap.newKeySet();
+
+    // Thread-safe queue to hand off chunks from the generation thread back to the main tick
+    private final ConcurrentLinkedQueue<ChunkPos> pendingLight = new ConcurrentLinkedQueue<>();
+
     /**
      * Default horizontal chunk load radius in chunk units.
      * Used to initialize {@link #renderDistanceH} and as the fallback for any
@@ -59,9 +68,6 @@ public class World implements BlockView {
      */
     private volatile boolean pendingUnloadSweep = false;
 
-    /** Maximum chunk uploads (data stores) per frame from the pending queue. */
-    private static final int MAX_UPLOADS_PER_FRAME = 256;
-
     /**
      * Maximum generation tasks submitted to the executor per tick.
      * Keeps the executor queue shallow so priority re-sorts take effect immediately.
@@ -71,7 +77,7 @@ public class World implements BlockView {
     // -------------------------------------------------------------------------
     // Chunk data — server tick thread only after draining
     // -------------------------------------------------------------------------
-    private final Map<ChunkPos, Chunk> chunks      = new HashMap<>();
+    private final Map<ChunkPos, Chunk> chunks = new ConcurrentHashMap<>();
     private final Set<ChunkPos>        inProgress  = new HashSet<>();
     private final List<ChunkPos>       generationQueue = new ArrayList<>();
 
@@ -204,8 +210,6 @@ public class World implements BlockView {
             unloadDistantChunks(viewers);
         }
 
-        drainPendingChunks(viewers);
-
         Set<ChunkPos> viewerChunks = new HashSet<>();
         for (ViewerInfo viewer : viewers) {
             int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
@@ -221,6 +225,7 @@ public class World implements BlockView {
         }
 
         tickGenerationQueue(viewers);
+        tickStateMachine(viewers);
         unloadDistantChunks(viewers);
         saveDirtyChunks(); // flush block changes to disk at end of each tick
     }
@@ -337,24 +342,6 @@ public class World implements BlockView {
     // -------------------------------------------------------------------------
 
     /**
-     * Drains completed generation results into the chunk map.
-     * Discards results for chunks that have moved out of range while the worker was running.
-        *
-        * @thread server-tick
-        * @gl-state n/a
-     */
-    private void drainPendingChunks(List<ViewerInfo> viewers) {
-        PendingChunk pending;
-        int stored = 0;
-        while (stored < MAX_UPLOADS_PER_FRAME && (pending = pendingChunks.poll()) != null) {
-            inProgress.remove(pending.pos());
-            if (!isInRangeOfAny(pending.pos(), viewers)) continue;
-            chunks.put(pending.pos(), pending.chunk());
-            stored++;
-        }
-    }
-
-    /**
      * Adds all in-range, not-yet-queued chunk positions to {@link #generationQueue}.
      * Only called when the set of viewer center chunks changes.
      */
@@ -363,16 +350,19 @@ public class World implements BlockView {
             int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
             int centerCY = Math.floorDiv((int) viewer.y(), Chunk.SIZE);
             int centerCZ = Math.floorDiv((int) viewer.z(), Chunk.SIZE);
-            for (int cx = centerCX - renderDistanceH; cx <= centerCX + renderDistanceH; cx++) {
-                for (int cz = centerCZ - renderDistanceH; cz <= centerCZ + renderDistanceH; cz++) {
+            
+            // Pad the radius by 2 to feed the client's State Machine collar
+            int paddedRadius = renderDistanceH + 2;
+
+            for (int cx = centerCX - paddedRadius; cx <= centerCX + paddedRadius; cx++) {
+                for (int cz = centerCZ - paddedRadius; cz <= centerCZ + paddedRadius; cz++) {
                     int dx = cx - centerCX, dz = cz - centerCZ;
-                    if (dx * dx + dz * dz > renderDistanceH * renderDistanceH) continue;
-                    for (int cy = centerCY - RENDER_DISTANCE_V; cy <= centerCY + RENDER_DISTANCE_V; cy++) {
+                    if (dx * dx + dz * dz > paddedRadius * paddedRadius) continue;
+                    
+                    for (int cy = centerCY - RENDER_DISTANCE_V - 2; cy <= centerCY + RENDER_DISTANCE_V + 2; cy++) {
                         if (cy < 0) continue;
                         ChunkPos pos = new ChunkPos(cx, cy, cz);
-                        if (!chunks.containsKey(pos)
-                                && !inProgress.contains(pos)
-                                && !generationQueue.contains(pos)) {
+                        if (!chunks.containsKey(pos) && !inProgress.contains(pos) && !generationQueue.contains(pos)) {
                             generationQueue.add(pos);
                         }
                     }
@@ -393,6 +383,12 @@ public class World implements BlockView {
         for (ChunkPos pos : toUnload) {
             chunks.remove(pos);
             evictHeightmapIfColumnUnloaded(pos);
+
+            // Clear state machine memory to prevent RAM leaks
+            generatedChunks.remove(pos);
+            lightScheduled.remove(pos);
+            lightReady.remove(pos);
+            networkScheduled.remove(pos);
         }
     }
 
@@ -443,8 +439,13 @@ public class World implements BlockView {
 
     private boolean isInRange(ChunkPos pos, int centerCX, int centerCY, int centerCZ) {
         int dx = pos.x() - centerCX, dy = pos.y() - centerCY, dz = pos.z() - centerCZ;
-        return dx * dx + dz * dz <= renderDistanceH * renderDistanceH
-            && Math.abs(dy) <= RENDER_DISTANCE_V;
+        
+        // Pad BOTH horizontal and vertical radiuses by 2 to sustain the State Machine collars
+        int paddedRadiusH = renderDistanceH + 2;
+        int paddedRadiusV = RENDER_DISTANCE_V + 2;
+        
+        return dx * dx + dz * dz <= paddedRadiusH * paddedRadiusH
+            && Math.abs(dy) <= paddedRadiusV;
     }
 
     private boolean isInRangeOfAny(ChunkPos pos, List<ViewerInfo> viewers) {
@@ -465,11 +466,6 @@ public class World implements BlockView {
         }
     }
 
-    /**
-     * Re-sorts the generation queue by direction-biased distance and submits tasks
-     * to the executor each tick. Budget split: 75% direction-biased, 25% pure distance.
-     * Keeps the executor queue shallow so priority changes take effect within one tick.
-     */
     private void tickGenerationQueue(List<ViewerInfo> viewers) {
         if (generationQueue.isEmpty()) return;
         if (viewers.isEmpty()) return;
@@ -479,39 +475,7 @@ public class World implements BlockView {
 
         if (generationQueue.isEmpty()) return;
 
-        int biasedCount   = (int) (MAX_CHUNKS_PER_TICK * 0.75);
-        int distanceCount = MAX_CHUNKS_PER_TICK - biasedCount;
-
-        // --- Biased pass: sort by direction-weighted distance ---
-        generationQueue.sort(Comparator.comparingDouble(p -> {
-            ViewerInfo nearest = findNearestViewer(p, viewers);
-            int centerCX = Math.floorDiv((int) nearest.x(), Chunk.SIZE);
-            int centerCY = Math.floorDiv((int) nearest.y(), Chunk.SIZE);
-            int centerCZ = Math.floorDiv((int) nearest.z(), Chunk.SIZE);
-            float dx = p.x() - centerCX, dy = p.y() - centerCY, dz = p.z() - centerCZ;
-            float squaredDist = dx * dx + dy * dy + dz * dz;
-            float dot = 0f;
-            float len = (float) Math.sqrt(squaredDist);
-            if (len > 0.001f && (nearest.dirX() != 0 || nearest.dirY() != 0 || nearest.dirZ() != 0)) {
-                dot = (dx / len) * nearest.dirX()
-                    + (dy / len) * nearest.dirY()
-                    + (dz / len) * nearest.dirZ();
-            }
-            return squaredDist * (1.0 - dot * 0.5);
-        }));
-
-        Set<ChunkPos> submittedThisTick = new HashSet<>();
-        Iterator<ChunkPos> it = generationQueue.iterator();
-        int submitted = 0;
-        while (it.hasNext() && submitted < biasedCount) {
-            ChunkPos pos = it.next();
-            it.remove();
-            submitToExecutor(pos);
-            submittedThisTick.add(pos);
-            submitted++;
-        }
-
-        // --- Distance pass: guarantees background progress regardless of look direction ---
+        // --- Pure Distance Pass: Guarantees perfect concentric rings for the client's State Machine ---
         generationQueue.sort(Comparator.comparingInt(p -> {
             ViewerInfo nearest = findNearestViewer(p, viewers);
             int centerCX = Math.floorDiv((int) nearest.x(), Chunk.SIZE);
@@ -521,14 +485,150 @@ public class World implements BlockView {
             return dx * dx + dy * dy + dz * dz;
         }));
 
-        it = generationQueue.iterator();
-        submitted = 0;
-        while (it.hasNext() && submitted < distanceCount) {
+        Iterator<ChunkPos> it = generationQueue.iterator();
+        int submitted = 0;
+        while (it.hasNext() && submitted < MAX_CHUNKS_PER_TICK) {
             ChunkPos pos = it.next();
-            if (submittedThisTick.contains(pos)) continue;
             it.remove();
             submitToExecutor(pos);
             submitted++;
+        }
+    }
+
+    ///**
+    // * Re-sorts the generation queue by direction-biased distance and submits tasks
+    // * to the executor each tick. Budget split: 75% direction-biased, 25% pure distance.
+    // * Keeps the executor queue shallow so priority changes take effect within one tick.
+    // */
+    //private void tickGenerationQueue(List<ViewerInfo> viewers) {
+    //    if (generationQueue.isEmpty()) return;
+    //    if (viewers.isEmpty()) return;
+//
+    //    generationQueue.removeIf(pos ->
+    //        chunks.containsKey(pos) || inProgress.contains(pos));
+//
+    //    if (generationQueue.isEmpty()) return;
+//
+    //    int biasedCount   = (int) (MAX_CHUNKS_PER_TICK * 0.75);
+    //    int distanceCount = MAX_CHUNKS_PER_TICK - biasedCount;
+//
+    //    // --- Biased pass: sort by direction-weighted distance ---
+    //    generationQueue.sort(Comparator.comparingDouble(p -> {
+    //        ViewerInfo nearest = findNearestViewer(p, viewers);
+    //        int centerCX = Math.floorDiv((int) nearest.x(), Chunk.SIZE);
+    //        int centerCY = Math.floorDiv((int) nearest.y(), Chunk.SIZE);
+    //        int centerCZ = Math.floorDiv((int) nearest.z(), Chunk.SIZE);
+    //        float dx = p.x() - centerCX, dy = p.y() - centerCY, dz = p.z() - centerCZ;
+    //        float squaredDist = dx * dx + dy * dy + dz * dz;
+    //        float dot = 0f;
+    //        float len = (float) Math.sqrt(squaredDist);
+    //        if (len > 0.001f && (nearest.dirX() != 0 || nearest.dirY() != 0 || nearest.dirZ() != 0)) {
+    //            dot = (dx / len) * nearest.dirX()
+    //                + (dy / len) * nearest.dirY()
+    //                + (dz / len) * nearest.dirZ();
+    //        }
+    //        return squaredDist * (1.0 - dot * 0.5);
+    //    }));
+//
+    //    Set<ChunkPos> submittedThisTick = new HashSet<>();
+    //    Iterator<ChunkPos> it = generationQueue.iterator();
+    //    int submitted = 0;
+    //    while (it.hasNext() && submitted < biasedCount) {
+    //        ChunkPos pos = it.next();
+    //        it.remove();
+    //        submitToExecutor(pos);
+    //        submittedThisTick.add(pos);
+    //        submitted++;
+    //    }
+//
+    //    // --- Distance pass: guarantees background progress regardless of look direction ---
+    //    generationQueue.sort(Comparator.comparingInt(p -> {
+    //        ViewerInfo nearest = findNearestViewer(p, viewers);
+    //        int centerCX = Math.floorDiv((int) nearest.x(), Chunk.SIZE);
+    //        int centerCY = Math.floorDiv((int) nearest.y(), Chunk.SIZE);
+    //        int centerCZ = Math.floorDiv((int) nearest.z(), Chunk.SIZE);
+    //        int dx = p.x() - centerCX, dy = p.y() - centerCY, dz = p.z() - centerCZ;
+    //        return dx * dx + dy * dy + dz * dz;
+    //    }));
+//
+    //    it = generationQueue.iterator();
+    //    submitted = 0;
+    //    while (it.hasNext() && submitted < distanceCount) {
+    //        ChunkPos pos = it.next();
+    //        if (submittedThisTick.contains(pos)) continue;
+    //        it.remove();
+    //        submitToExecutor(pos);
+    //        submitted++;
+    //    }
+    //}
+
+    private int debugTickCounter = 0;
+
+    private void tickStateMachine(List<ViewerInfo> viewers) {
+        if (viewers == null || viewers.isEmpty()) return;
+
+        // --- STAGE 1: Drain raw block data -> Promote to Light Engine ---
+        PendingChunk pending;
+        while ((pending = pendingChunks.poll()) != null) {
+            ChunkPos pos = pending.pos();
+            chunks.put(pos, pending.chunk());
+            generatedChunks.add(pos);
+            inProgress.remove(pos);
+
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        ChunkPos n = new ChunkPos(pos.x() + dx, pos.y() + dy, pos.z() + dz);
+                        
+                        if (generatedChunks.contains(n) && !lightScheduled.contains(n)) {
+                            if (hasCompleteCollar(n, generatedChunks, viewers)) {
+                                lightScheduled.add(n);
+                                
+                                generationExecutor.submit(() -> {
+                                    try {
+                                        // Catch silent background crashes!
+                                        com.voxelgame.common.world.LightEngine.initChunkLight(chunks, n);
+                                        pendingLight.offer(n);
+                                    } catch (Exception e) {
+                                        System.err.println("CRASH IN LIGHT ENGINE AT " + n + ": " + e.getMessage());
+                                        e.printStackTrace();
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- STAGE 2: Drain lit chunks -> Promote to Network Stream ---
+        ChunkPos litPos;
+        while ((litPos = pendingLight.poll()) != null) {
+            lightReady.add(litPos);
+
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        ChunkPos n = new ChunkPos(litPos.x() + dx, litPos.y() + dy, litPos.z() + dz);
+                        
+                        if (lightReady.contains(n) && !networkScheduled.contains(n)) {
+                            if (hasCompleteCollar(n, lightReady, viewers)) {
+                                networkScheduled.add(n);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- TELEMETRY TRACKER ---
+        debugTickCounter++;
+        if (debugTickCounter >= 60) {
+            System.out.println(String.format(
+                "[State Machine] RawGen: %d | LightSch: %d | LightRdy: %d | NetSch: %d",
+                generatedChunks.size(), lightScheduled.size(), lightReady.size(), networkScheduled.size()
+            ));
+            debugTickCounter = 0;
         }
     }
 
@@ -562,21 +662,68 @@ public class World implements BlockView {
      */
     private void submitToExecutor(ChunkPos pos) {
         inProgress.add(pos);
-        // Capture storage reference — lambda must not access mutable instance state
         final ChunkStorage storageRef = this.storage;
+        
         generationExecutor.submit(() -> {
             byte[] saved = storageRef != null ? storageRef.load(pos) : null;
             Chunk chunk;
+            
             if (saved != null) {
-                // Restore from disk. Sky light is not serialised — recompute it
-                // from the heightmap so lighting matches newly generated chunks.
+                // Restore from disk and populate sky light columns
                 chunk = Chunk.fromBytes(saved);
                 terrainGenerator.fillSkyLight(chunk, pos);
             } else {
-                // Generate fresh terrain. generateChunk() fills sky light internally.
+                // Generate fresh terrain arrays
                 chunk = terrainGenerator.generateChunk(pos);
             }
+            
+            // Pass the raw chunk back to the main thread to enter the State Machine
             pendingChunks.offer(new PendingChunk(pos, chunk));
         });
+    }
+
+    private boolean isOutsideGenerationLimits(ChunkPos pos, List<ViewerInfo> viewers) {
+        if (pos.y() < 0) return true;
+
+        for (ViewerInfo viewer : viewers) {
+            int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
+            int centerCY = Math.floorDiv((int) viewer.y(), Chunk.SIZE);
+            int centerCZ = Math.floorDiv((int) viewer.z(), Chunk.SIZE);
+            
+            int dx = pos.x() - centerCX;
+            int dy = pos.y() - centerCY;
+            int dz = pos.z() - centerCZ;
+            
+            // Validate against the padded horizontal and vertical boundaries
+            int paddedRadius = renderDistanceH + 2;
+            if (dx * dx + dz * dz <= paddedRadius * paddedRadius && Math.abs(dy) <= RENDER_DISTANCE_V + 2) {
+                return false; 
+            }
+        }
+        return true;
+    }
+
+    private boolean hasCompleteCollar(ChunkPos pos, Set<ChunkPos> stateSet, List<ViewerInfo> viewers) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) continue;
+                    
+                    ChunkPos n = new ChunkPos(pos.x() + dx, pos.y() + dy, pos.z() + dz);
+                    
+                    if (!stateSet.contains(n)) {
+                        // If the neighbor is missing but outside the world limits, bypass it
+                        if (isOutsideGenerationLimits(n, viewers)) continue;
+                        
+                        return false; // Neighbor is missing and within limits; collar is incomplete
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    public boolean isChunkReadyForNetwork(ChunkPos pos) {
+        return networkScheduled.contains(pos);
     }
 }
