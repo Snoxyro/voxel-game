@@ -130,21 +130,22 @@ Phase 6 — Foundation for extensibility. 6A, 6B, and 6C complete. Next: 6D Enti
   - SettingsScreen — tabbed UI (Gameplay/Graphics/Display/Controls/Keybinds/Sound)
   - Live render distance, live FOV/VSync/theme/window mode on save
   - Multiplayer bugs fixed: chunk load order, block-in-hitbox, per-player streaming, visibility
-- 6C done: Lighting + Day/Night Cycle
-  - LightEngine: column skylight, block light emission seeding
+- 6C done: Lighting + Day/Night Cycle + Full BFS Propagation
+  - LightEngine: full BFS propagation (initChunkLight, propagateAfterBreak/Place)
+  - Server 2-stage state machine (generated → lit → network-ready, 3×3×3 collar gates)
+  - Client-side prediction (instant setBlock → local BFS + sync mesh before network)
   - Vertex brightness baking in ChunkMesher (pow(0.8, 15-level) gamma curve)
   - u_brightnessFloor uniform (brightness slider), u_ambientFactor uniform (day/night)
   - AO toggle (ChunkMesher.aoEnabled volatile, async remesh on change)
   - WorldTime (common/world/): tick(), getAmbientFactor(), getSkyColor(); volatile worldTick
   - WorldTimePacket (0x18): server broadcasts every 20 ticks; client applies via applyWorldTime()
   - Dynamic glClearColor from WorldTime.getSkyColor() each frame
-  - Skylight recompute on block change: automatic via existing dirty-mark pipeline
-- 6D (next): Entity System + Player Model
+  - Chunk serialization: 12,288 bytes (8KB blocks + 4KB packed light nibbles)
 
 ### After 6D:
 - 6E: Items + Inventory
-- Phase 7: BFS Light Propagation (flood fill, torches, correct gradients)
-- Phase 8: Modding API
+- Phase 7: Modding API (requires 6D + 6E complete first)
+- Phase 8+: Content & Polish (non-solid blocks, caves, biomes, advanced optimizations)
 
 ## Key Constraints
 - Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`
@@ -176,16 +177,6 @@ Phase 6 — Foundation for extensibility. 6A, 6B, and 6C complete. Next: 6D Enti
   not stored in GameSettings. Do not change this — it would break saved settings.
 - Do not revert World.update() to a single-viewer signature — it accepts
   List<World.ViewerInfo> and that is a locked architecture decision
-
-**Constraints given by gemini, ignore for now. Will be edited later.**
-  ## Key Constraints
-- Server has zero GL dependency — no `engine/` imports in `server/` or `game/World.java`
-- GL calls on main thread only — never pass GL calls to worker or Netty threads
-- Chunk mesh generation on worker threads; `new Mesh(vertices)` on main thread only
-- `Chunk.SERIALIZED_SIZE` is **12288 bytes** (8192 bytes for short[] blocks, 4096 bytes for byte[] lightData).
-- The server runs a strict **State Machine**. Chunks must pass through `generatedChunks` -> `lightScheduled` -> `lightReady` -> `networkScheduled`. `ServerWorld` must only transmit chunks if `world.isChunkReadyForNetwork(pos)` is true.
-- Block interaction uses **Client-Side Prediction**. `GameLoop` must call `clientWorld.setBlock()` instantly to trigger a local synchronous mesh+light update before sending a network packet.
-- Generation queues must use **Pure Radial Sorting**. Look-direction bias starves the State Machine collars.
 
 ## What NOT to Do
 - Do not suggest switching to Maven

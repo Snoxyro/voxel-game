@@ -162,14 +162,18 @@ See [DEVLOG.md](DEVLOG.md) for active record and [DEVLOG_ARCHIVE.md](DEVLOG_ARCH
     - [x] 6C-5 — AO toggle in settings (async full remesh on change)
     - [x] 6C-6 — Day/night cycle (WorldTime, u_ambientFactor, sky color, WorldTimePacket)
     - [x] 6C-7 — Skylight recompute on block place/break (automatic via existing pipeline)
+    - [x] 6C-BFS — Full BFS light propagation (server-side state machine, cross-chunk bleeding)
+    - [x] 6C-BFS — Client-side prediction (instant local light + mesh update on block edit)
+    - [x] 6C-BFS — Incremental updates (propagateAfterBreak/Place, no full recompute)
   - [ ] 6D — Entity System + Player Model
   - [ ] 6E — Items + Inventory
-- [ ] Phase 7 — BFS Light Propagation
-  - [ ] Queue-based flood fill across chunk boundaries (skylight + block light)
-  - [ ] Correct gradients under overhangs and into caves
-  - [ ] Torch-style point light sources
-  - [ ] Incremental updates on block place/break (not full recompute)
-- [ ] Phase 8 — Modding API
+- [ ] Phase 7 — Modding API
   - [ ] Block / item / entity registry hooks exposed to external code
   - [ ] World gen hooks, event listeners
   - [ ] Scripting runtime
+- [ ] Phase 8+ — Content & Polish
+  - [ ] Non-solid blocks (slabs, stairs, fences)
+  - [ ] Transparent blocks (glass, water, leaves — dual-buffer render)
+  - [ ] Cave generation (3D noise density carving)
+  - [ ] Biomes and structure generation
+  - [ ] Advanced optimizations (palette compression, octree, occlusion queries)

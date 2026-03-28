@@ -6,6 +6,7 @@ import java.util.Arrays;
 
 /**
  * Represents a fixed-size 3D chunk of blocks.
+     * @thread any
  *
  * <p>Blocks are stored as a flat {@code short[]} of registry IDs — a single
  * contiguous 8 KB allocation. Registry ID 0 = {@link Blocks#AIR}, which matches
@@ -93,6 +94,8 @@ public class Chunk {
 
     /**
      * Creates a new chunk with all block positions initialised to {@link Blocks#AIR} (ID 0).
+     *
+     * @thread any
      */
     public Chunk() {
         this.blocks = new short[VOLUME];
@@ -105,14 +108,37 @@ public class Chunk {
     // World-coordinate conversion utilities
     // -------------------------------------------------------------------------
 
+    /**
+     * Converts a world-space block coordinate to its chunk index on one axis.
+     *
+     * @param worldCoord world-space block coordinate
+     * @return chunk coordinate on the same axis
+     * @thread any
+     */
     public static int worldToChunk(int worldCoord) {
         return Math.floorDiv(worldCoord, SIZE);
     }
 
+    /**
+     * Converts a world-space block coordinate to local in-chunk coordinate [0, SIZE).
+     *
+     * @param worldCoord world-space block coordinate
+     * @return local block coordinate in the chunk
+     * @thread any
+     */
     public static int worldToLocal(int worldCoord) {
         return Math.floorMod(worldCoord, SIZE);
     }
 
+    /**
+     * Converts world-space block coordinates to a chunk-grid position.
+     *
+     * @param wx world-space X
+     * @param wy world-space Y
+     * @param wz world-space Z
+     * @return chunk-grid position containing the world coordinate
+     * @thread any
+     */
     public static ChunkPos worldToChunkPos(int wx, int wy, int wz) {
         return new ChunkPos(
             worldToChunk(wx),
@@ -142,6 +168,7 @@ public class Chunk {
      * @param y    local Y [0, SIZE)
      * @param z    local Z [0, SIZE)
      * @param type the block type to place
+    * @thread any
      */
     public void setBlock(int x, int y, int z, BlockType type) {
         int idx = x * SIZE * SIZE + y * SIZE + z;
@@ -164,13 +191,24 @@ public class Chunk {
      * O(1) — uses the maintained {@code solidCount}.
      *
      * @return {@code true} if all air
+        * @thread any
      */
     public boolean isAllAir() { return solidCount == 0; }
 
-    /** Returns the lowest Y layer that contains a non-air block. Sentinel = SIZE when empty. */
+    /**
+     * Returns the lowest Y layer that contains a non-air block.
+     *
+     * @return minimum occupied Y, or SIZE when empty
+     * @thread any
+     */
     public int getMinOccupiedY() { return minOccupiedY; }
 
-    /** Returns the highest Y layer that contains a non-air block. Sentinel = -1 when empty. */
+    /**
+     * Returns the highest Y layer that contains a non-air block.
+     *
+     * @return maximum occupied Y, or -1 when empty
+     * @thread any
+     */
     public int getMaxOccupiedY() { return maxOccupiedY; }
 
     // -------------------------------------------------------------------------
@@ -198,6 +236,7 @@ public class Chunk {
      * @param y local Y [0, SIZE)
      * @param z local Z [0, SIZE)
      * @return sky light level in [0, 15]
+        * @thread any
      */
     public int getSkyLight(int x, int y, int z) {
         // Unsigned right-shift so the sign bit of the byte does not contaminate
@@ -214,6 +253,7 @@ public class Chunk {
      * @param y local Y [0, SIZE)
      * @param z local Z [0, SIZE)
      * @return block light level in [0, 15]
+    * @thread any
      */
     public int getBlockLight(int x, int y, int z) {
         return lightData[x * SIZE * SIZE + y * SIZE + z] & 0xF;
@@ -227,6 +267,7 @@ public class Chunk {
      * @param y     local Y [0, SIZE)
      * @param z     local Z [0, SIZE)
      * @param level sky light level in [0, 15]
+    * @thread any
      */
     public void setSkyLight(int x, int y, int z, int level) {
         int idx = x * SIZE * SIZE + y * SIZE + z;
@@ -242,6 +283,7 @@ public class Chunk {
      * @param y     local Y [0, SIZE)
      * @param z     local Z [0, SIZE)
      * @param level block light level in [0, 15]
+    * @thread any
      */
     public void setBlockLight(int x, int y, int z, int level) {
         int idx = x * SIZE * SIZE + y * SIZE + z;
@@ -259,6 +301,7 @@ public class Chunk {
      * @param y local Y [0, SIZE)
      * @param z local Z [0, SIZE)
      * @return packed byte: {@code (sky << 4) | block}
+     * @thread any
      */
     public byte getLightPacked(int x, int y, int z) {
         return lightData[x * SIZE * SIZE + y * SIZE + z];
@@ -281,6 +324,7 @@ public class Chunk {
      * @param lz           local Z within this chunk [0, SIZE)
      * @param surfaceWorldY world-space Y of the topmost solid block in this column
      * @param chunkWorldY  world-space Y of this chunk's bottom layer (pos.worldY())
+    * @thread any
      */
     public void fillColumnSkyLight(int lx, int lz, int surfaceWorldY, int chunkWorldY) {
         for (int ly = 0; ly < SIZE; ly++) {
@@ -297,6 +341,7 @@ public class Chunk {
      * block position is in direct sunlight, without needing a per-column scan.
      *
      * @param level sky light level to write everywhere (0–15)
+    * @thread any
      */
     public void fillAllSkyLight(int level) {
         // Pack the level into the high nibble. Block light stays 0 (low nibble).
@@ -318,6 +363,8 @@ public class Chunk {
      * {@link #fillColumnSkyLight} for chunks whose top layer is exposed sky — this
      * method cannot see solid blocks in the chunk above. Full accuracy requires
      * either network-transmitted sky data (Phase 8+) or per-column exposure flags.
+    *
+    * @thread any
      */
     public void recomputeSkyLightFromBlocks() {
         for (int lx = 0; lx < SIZE; lx++) {
@@ -347,12 +394,19 @@ public class Chunk {
      * @param y local Y in [0, SIZE)
      * @param z local Z in [0, SIZE)
      * @return maximum of skylight and block light in [0, 15]
+    * @thread any
      */
     public int getMaxLight(int x, int y, int z) {
         int packed = lightData[x * SIZE * SIZE + y * SIZE + z] & 0xFF;
         return Math.max(packed >> 4, packed & 0x0F);
     }
 
+    /**
+     * Serializes blocks and packed light bytes into the network/disk chunk format.
+     *
+     * @return exactly {@link #SERIALIZED_SIZE} bytes (big-endian block IDs + packed light bytes)
+     * @thread any
+     */
     public byte[] toBytes() {
         ByteBuffer buf = ByteBuffer.allocate(SERIALIZED_SIZE).order(ByteOrder.BIG_ENDIAN);
         for (short id : blocks) {
@@ -363,6 +417,13 @@ public class Chunk {
         return buf.array();
     }
 
+    /**
+     * Deserializes a chunk from the network/disk chunk format.
+     *
+     * @param data serialized chunk bytes, expected size {@link #SERIALIZED_SIZE}
+     * @return reconstructed chunk with blocks and packed light data
+     * @thread any
+     */
     public static Chunk fromBytes(byte[] data) {
         if (data.length != SERIALIZED_SIZE) {
             throw new IllegalArgumentException(
@@ -393,6 +454,8 @@ public class Chunk {
      * block in the chunk). Called by {@link com.voxelgame.common.world.LightEngine}
      * at the start of each light recomputation to ensure stale values from a previous
      * pass are never carried over after a block placement or break.
+     *
+     * @thread any
      */
     public void clearLight() {
         Arrays.fill(lightData, (byte) 0);
@@ -400,6 +463,9 @@ public class Chunk {
 
     /**
      * Retrieves the packed light array for network transmission.
+     *
+     * @return mutable packed light-byte array (high nibble = sky, low nibble = block)
+     * @thread any
      */
     public byte[] getLightBytes() {
         return lightData;
@@ -407,6 +473,9 @@ public class Chunk {
 
     /**
      * Applies a compressed network byte array directly into the chunk's light storage.
+     *
+     * @param newLightData packed light-byte array, expected length = VOLUME
+     * @thread any
      */
     public void setLightBytes(byte[] newLightData) {
         if (newLightData == null || newLightData.length != VOLUME) return;

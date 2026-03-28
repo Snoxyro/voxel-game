@@ -39,7 +39,7 @@ src/main/java/com/voxelgame/
 │   │   ├── Chunk.java         ← short[] blocks + byte[] lightData (packed nibbles: high=sky, low=block)
 │   │   ├── ChunkPos.java
 │   │   ├── WorldTime.java     ← day/night math: tick(), getAmbientFactor(), getSkyColor(); volatile worldTick
-│   │   ├── LightEngine.java   ← static: computeChunkLight(chunk, pos, neighbors); column skylight + emission seed
+│   │   ├── LightEngine.java   ← BFS light propagation: initChunkLight (full-chunk), propagateAfterBreak/Place (incremental)
 │   │   ├── PhysicsBody.java
 │   │   ├── RayCaster.java
 │   │   └── RaycastResult.java
@@ -166,13 +166,25 @@ ID 0 = AIR is a permanent contract — `Chunk` zero-initialises its `short[]` to
 Never reorder existing registrations — it corrupts save files and in-flight packets.
 
 ### 6. Light System
-Lighting is **Server-Authoritative**. `Chunk` stores `byte[] lightData` — 4096 bytes, 
-packed nibbles (high = skylight 0–15, low = block light 0–15). Chunks serialize to 12,288 bytes.
-The server coordinates initial lighting calculations using a 2-stage State Machine to ensure 
-flawless boundary bleeding before transmission. To prevent latency, the client utilizes 
-**Client-Side Prediction**: local block edits trigger instant synchronous localized BFS updates 
-(`setBlock`) before transmitting the action to the server. The client ignores the server's echo 
-packet if the state already matches.
+Lighting is **Server-Authoritative** with full BFS propagation. `Chunk` stores
+`byte[] lightData` — 4096 bytes, packed nibbles (high = skylight 0–15, low = block
+light 0–15). Chunks serialize to 12,288 bytes (8KB blocks + 4KB light).
+
+**Server pipeline:** `World.java` runs a 2-stage State Machine. Stage 1: raw terrain
+generated → waits for 3×3×3 collar in `generatedChunks` → submits to background
+`LightEngine.initChunkLight()`. Stage 2: lit chunk placed in `lightReady` → waits
+for 3×3×3 lit collar → promoted to `networkScheduled`. `ServerWorld` only streams
+chunks that are `networkScheduled`.
+
+**Client prediction:** `ClientWorld.setBlock()` triggers instant synchronous
+`LightEngine.propagateAfterBreak()`/`propagateAfterPlace()` + mesh rebuild *before*
+sending the packet to the server. Server echo packets are silently dropped if the
+block already matches (prediction bypass guard).
+
+**BFS internals:** `LightEngine` uses dual BFS queues (sky + block), with the
+sunlight column rule (no decay when propagating straight down at MAX_LIGHT).
+`PrimitiveQueue` with `ThreadLocal` pooling to reduce GC pressure. `buildLocalGrid`
+captures a 3×3×3 `Chunk[]` array for cross-boundary propagation.
 
 ### 7. Day/Night Cycle
 `WorldTime` lives in `common/world/`. Server owns one instance, ticks it every server
@@ -250,6 +262,57 @@ bugs or crashes with no useful stack trace.
   `world.setRenderDistance()`. `GameLoop.applySettings()` calls
   `activeServer.setRenderDistance()`. No other call site should exist.
 
+- **`World.tickStateMachine()` state progression is strict:**
+  `generatedChunks` → `lightScheduled` → `lightReady` → `networkScheduled`.
+  A chunk can only advance one stage per tick cycle. `hasCompleteCollar()` gates
+  each transition. `isOutsideGenerationLimits()` bypasses missing neighbors at
+  world boundaries (y<0, beyond padded render distance). Padding is +2 chunks on
+  all axes.
+
+- **`ClientWorld.meshScheduled` + `canMesh()` client-side collar:**
+  When a chunk arrives from the network, `drainPendingChunkData()` stores it and
+  calls `promoteToMeshIfReady()` on the chunk and its 3×3×3 neighborhood. `canMesh()`
+  requires all 26 neighbors to be present (or outside vertical bounds). Only chunks
+  in `meshScheduled` are added to the dirty queue. This prevents meshing before
+  neighbors arrive, which would produce incorrect face culling at chunk boundaries.
+
+- **`ClientWorld.processDirtyMeshes()` no longer calls `LightEngine`:**
+  Since 6C-BFS, chunks arrive from the server fully lit. The worker lambda is now
+  just `ChunkMesher.mesh()` → result posted to main thread. `LightEngine` is only
+  called during client-side prediction (`setBlock` / `applyBlockChange`).
+
+### 15. Debugging Protocol — AI Context Limitations
+
+Claude's RAG retrieval pulls file *fragments*, not complete files. When a bug spans
+multiple files (e.g. LightEngine + World + ClientWorld + ChunkMesher), Claude cannot
+hold all files simultaneously and falls into speculative thinking loops that burn
+token budgets without converging.
+
+**Escalation rules:**
+1. **Single-file logic bugs** — Claude handles these directly. Architecture,
+   algorithm design, and data flow reasoning are Claude's strength.
+2. **Multi-file interaction bugs** (symptoms: rendering artifacts, state machine
+   deadlocks, race conditions between server/client) — escalate immediately:
+   - **First try:** Developer pastes the relevant methods (not full files) from
+     each involved file directly into the chat. Claude analyzes the pasted code.
+   - **Second try:** If pasting doesn't resolve it, delegate to Claude Code with
+     a targeted `.claudeignore` that excludes irrelevant files.
+   - **Third try:** If Claude Code fails (token limits, peak hours), delegate to
+     Copilot with a structured `.prompt.md` file.
+   - **Fourth try:** Use Gemini with full repo upload for cross-file diagnosis.
+3. **Visual/rendering bugs** — always start with Copilot or Claude Code. These
+   require live cross-referencing of mesher + GL state + shaders simultaneously.
+
+**Three-strike rule:** If Claude cannot solve a bug within 3 focused attempts
+(not 3 thinking loops — 3 distinct proposed solutions that were tested), Claude
+must explicitly say "This needs multi-file context I can't hold. Escalate to
+[Claude Code / Copilot / paste the following methods]" and provide a specific
+diagnostic prompt for the escalation target.
+
+**Prevention:** When implementing changes that span 3+ files, Claude provides a
+"verification checklist" at the end listing every file touched and what to check
+in each. This catches integration bugs before they become debugging sessions.
+
 ## Important Notes for Claude
 
 ### Context File Maintenance (REQUIRED)
@@ -323,14 +386,14 @@ to replace, and provide the full replacement block. Full copy-pasteable blocks o
   - **6D (next):** Entity System + Player Model — entity framework, skeletal player
     model, item drop entities. Nametags deferred to here.
   - **6E:** Items + Inventory — item registry, hotbar, crafting grid, block drops.
-- **Phase 7:** BFS Light Propagation
-  - Queue-based flood fill across chunk boundaries (skylight + block light)
-  - Correct gradients under overhangs, into caves, around corners
-  - Torch-style point light sources with proper spread
-  - Incremental updates on block place/break (not full chunk recompute)
-  - Data layout already in place (lightData nibble arrays, LightEngine) — only
-    the propagation algorithm changes.
-- **Phase 8:** Modding API
+- **Phase 7:** Modding API
   - Block / item / entity registry hooks exposed to external code
   - World gen hooks, event listeners
   - Scripting runtime
+- **Phase 8+:** Content & Polish
+  - Non-solid blocks (slabs, stairs, fences)
+  - Transparent/semi-transparent blocks (glass, water, leaves)
+  - Cave generation (3D noise density carving)
+  - Biomes and structure generation
+  - Advanced optimizations (palette compression, octree culling) — driven by
+    measured bottlenecks, not speculative

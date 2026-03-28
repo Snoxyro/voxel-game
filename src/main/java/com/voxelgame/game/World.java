@@ -140,6 +140,7 @@ public class World implements BlockView {
      * Creates a World with the given world seed.
      *
      * @param seed world seed — same seed always produces identical terrain
+      * @param storage chunk persistence backend used for load/save operations
         * @thread server-tick (construction thread)
         * @gl-state n/a
      */
@@ -437,6 +438,7 @@ public class World implements BlockView {
         }
     }
 
+    // Tests whether a chunk is inside one viewer's padded horizontal/vertical range.
     private boolean isInRange(ChunkPos pos, int centerCX, int centerCY, int centerCZ) {
         int dx = pos.x() - centerCX, dy = pos.y() - centerCY, dz = pos.z() - centerCZ;
         
@@ -448,6 +450,7 @@ public class World implements BlockView {
             && Math.abs(dy) <= paddedRadiusV;
     }
 
+    // Tests whether a chunk is inside at least one active viewer's padded range.
     private boolean isInRangeOfAny(ChunkPos pos, List<ViewerInfo> viewers) {
         for (ViewerInfo v : viewers) {
             int cx = Math.floorDiv((int) v.x(), Chunk.SIZE);
@@ -458,6 +461,7 @@ public class World implements BlockView {
         return false;
     }
 
+    // Drops cached heightmap entries when an entire X/Z chunk column has been unloaded.
     private void evictHeightmapIfColumnUnloaded(ChunkPos pos) {
         boolean columnStillLoaded = chunks.keySet().stream()
             .anyMatch(p -> p.x() == pos.x() && p.z() == pos.z());
@@ -564,6 +568,17 @@ public class World implements BlockView {
 
     private int debugTickCounter = 0;
 
+    /**
+     * Advances the 2-stage chunk readiness state machine for network streaming.
+     *
+     * <p>Stage 1: generated -> lightScheduled -> lightReady.
+     * Stage 2: lightReady -> networkScheduled.
+     * Each promotion requires a complete 3x3x3 collar unless the missing neighbor
+     * is outside the padded generation limits.</p>
+     *
+     * @param viewers current viewer set used for world-boundary collar bypass checks
+     * @thread server-tick
+     */
     private void tickStateMachine(List<ViewerInfo> viewers) {
         if (viewers == null || viewers.isEmpty()) return;
 
@@ -581,6 +596,7 @@ public class World implements BlockView {
                         ChunkPos n = new ChunkPos(pos.x() + dx, pos.y() + dy, pos.z() + dz);
                         
                         if (generatedChunks.contains(n) && !lightScheduled.contains(n)) {
+                            // Promote only when all 26 neighbors are present (or out of padded bounds).
                             if (hasCompleteCollar(n, generatedChunks, viewers)) {
                                 lightScheduled.add(n);
                                 
@@ -612,6 +628,7 @@ public class World implements BlockView {
                         ChunkPos n = new ChunkPos(litPos.x() + dx, litPos.y() + dy, litPos.z() + dz);
                         
                         if (lightReady.contains(n) && !networkScheduled.contains(n)) {
+                            // Network-ready requires a fully lit collar to prevent border artifacts.
                             if (hasCompleteCollar(n, lightReady, viewers)) {
                                 networkScheduled.add(n);
                             }
@@ -632,6 +649,13 @@ public class World implements BlockView {
         }
     }
 
+    /**
+     * Returns the nearest viewer anchor to a chunk for distance-based prioritization.
+     *
+     * @param pos chunk position being prioritized
+     * @param viewers active viewers
+     * @return nearest viewer to {@code pos}
+     */
     private ViewerInfo findNearestViewer(ChunkPos pos, List<ViewerInfo> viewers) {
         ViewerInfo nearest = viewers.get(0);
         int nearestDistSq = chunkDistanceSq(pos, nearest);
@@ -646,6 +670,13 @@ public class World implements BlockView {
         return nearest;
     }
 
+    /**
+     * Computes squared chunk-space distance between a chunk and a viewer center chunk.
+     *
+     * @param pos chunk position
+     * @param viewer viewer anchor in world coordinates
+     * @return squared distance in chunk units
+     */
     private int chunkDistanceSq(ChunkPos pos, ViewerInfo viewer) {
         int centerCX = Math.floorDiv((int) viewer.x(), Chunk.SIZE);
         int centerCY = Math.floorDiv((int) viewer.y(), Chunk.SIZE);
@@ -660,6 +691,7 @@ public class World implements BlockView {
      * Captures a neighbor snapshot and submits one generation task to the executor.
      * Worker thread generates terrain only — no meshing, no GL calls.
      */
+    // Captures a local neighbor snapshot and submits one terrain-generation task.
     private void submitToExecutor(ChunkPos pos) {
         inProgress.add(pos);
         final ChunkStorage storageRef = this.storage;
@@ -682,6 +714,14 @@ public class World implements BlockView {
         });
     }
 
+    /**
+     * Checks whether a chunk lies outside the padded generation envelope of all viewers.
+     *
+     * @param pos chunk position to test
+     * @param viewers active viewers that define the streaming envelope
+     * @return true when the chunk is outside all padded viewer ranges
+     * @thread server-tick
+     */
     private boolean isOutsideGenerationLimits(ChunkPos pos, List<ViewerInfo> viewers) {
         if (pos.y() < 0) return true;
 
@@ -703,6 +743,16 @@ public class World implements BlockView {
         return true;
     }
 
+    /**
+     * Returns whether all 26 neighboring chunks for {@code pos} exist in {@code stateSet},
+     * allowing bypass only for neighbors outside padded world-generation limits.
+     *
+     * @param pos chunk position to validate
+     * @param stateSet state set representing the target promotion stage
+     * @param viewers active viewers used for padded-limit bypass checks
+     * @return true if the collar is complete for promotion
+     * @thread server-tick
+     */
     private boolean hasCompleteCollar(ChunkPos pos, Set<ChunkPos> stateSet, List<ViewerInfo> viewers) {
         for (int dx = -1; dx <= 1; dx++) {
             for (int dy = -1; dy <= 1; dy++) {
@@ -723,6 +773,13 @@ public class World implements BlockView {
         return true;
     }
 
+    /**
+     * Returns whether a chunk has reached the final network-streamable state.
+     *
+     * @param pos chunk position
+     * @return true if the chunk is ready to be sent to clients
+     * @thread server-tick
+     */
     public boolean isChunkReadyForNetwork(ChunkPos pos) {
         return networkScheduled.contains(pos);
     }

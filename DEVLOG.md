@@ -1038,7 +1038,7 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
-## Entry 051 — Settings Screen Polish
+## Entry 050 — Settings Screen Polish
 **Date:** 25.03.2026
 **Phase:** 6 — Foundation for extensibility (6B)
 
@@ -1102,7 +1102,7 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
-## Entry 050 — Phase 6B-7 Complete: Settings System
+## Entry 051 — Phase 6B-7 Complete: Settings System
 **Date:** 25.03.2026
 **Phase:** 6 — Foundation for extensibility (6B)
 
@@ -1195,7 +1195,7 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
-## Entry 051 — Phase 6C-1/2/3: Lighting Foundation
+## Entry 052 — Phase 6C-1/2/3: Lighting Foundation
 **Date:** 25.03.2026
 **Phase:** 6 — Foundation for extensibility (6C)
 
@@ -1277,7 +1277,7 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
-## Entry 052 — Phase 6C-4/5: Brightness Slider + AO Toggle
+## Entry 053 — Phase 6C-4/5: Brightness Slider + AO Toggle
 **Date:** 25.03.2026
 **Phase:** 6 — Foundation for extensibility (6C)
 
@@ -1332,7 +1332,7 @@ mechanical but voluminous nature of the widget rendering code.
 
 ---
 
-## Entry 053 — Phase 6C-6/7: Day/Night Cycle + Skylight Recompute
+## Entry 054 — Phase 6C-6/7: Day/Night Cycle + Skylight Recompute
 **Date:** 25.03.2026
 **Phase:** 6 — Foundation for extensibility (6C)
 
@@ -1446,22 +1446,18 @@ rendering pipeline changes when they arrive:
    faces that are partially visible through each other produce incorrect blending.
 5. `BlockRegistry` / `BlockType` from 6A is already shaped correctly for this.
    Nothing done to date makes the transparent block implementation harder.
-Deferred to Phase 8+. Data layout is compatible.
+Deferred to Phase 8+. Data layout is compatible. (Phase numbers shifted after BFS
+was completed inside 6C — see Entry 059.)
 
-### Phase Roadmap Revision — BFS Before Modding
-Phase ordering updated after 6C completion:
-- **Phase 7** promoted to **BFS Light Propagation** (was: Modding API).
-- **Phase 8** becomes **Modding API** (was: BFS + deferred items).
-Rationale: BFS propagation completes the lighting story (correct gradients under
-overhangs, torch spread), is a prerequisite for torches feeling correct, and has
-significantly higher visual and gameplay impact than a modding API at this stage.
-The modding API requires entity and item systems that don't exist yet anyway —
-deferring it one phase costs nothing. BFS data layout (lightData nibble arrays,
-`setSkyLight`/`setBlockLight`, `LightEngine`) is already fully in place from 6C-1.
+### Phase Roadmap Revision — BFS Before Modding (RESOLVED)
+BFS light propagation was originally planned for Phase 7. It was implemented early
+inside Phase 6C (Entries 055–057) by Gemini when Claude could not complete it due to
+RAG context limitations. As a result, Phase 7 (BFS) is now collapsed — the Modding
+API slides from Phase 8 to Phase 7. See Entry 059 for the full roadmap revision.
 
 ---
 
-## Entry 054 — Workflow: Context System Improvements
+## Entry 055 — Workflow: Context System Improvements
 **Date:** 26.03.2026
 **Phase:** 6 — Meta / Workflow
 
@@ -1501,7 +1497,7 @@ Javadoc so any retrieved chunk carries its own dependency information.
 
 ---
 
-## Entry 055 — Pure Radial Chunk Loading & State Machine Limits
+## Entry 056 — Pure Radial Chunk Loading & State Machine Limits
 **Date:** 26.03.2026
 **Phase:** 6 — Foundation for extensibility (6C)
 
@@ -1524,13 +1520,13 @@ Javadoc so any retrieved chunk carries its own dependency information.
 
 ---
 
-## Entry 056 — Server-Side Lighting & The Server State Machine
+## Entry 057 — Server-Side Lighting & The Server State Machine
 **Date:** 26.03.2026
 **Phase:** 6 — Foundation for extensibility (6C)
 
 ### What Was Done
 - Shifted absolute lighting authority from the client to the server to support future core mechanics (mob spawning, crop growth). 
-- Updated `Chunk.java` serialization. `getLightBytes()` and `setLightBytes()` now pack/unpack the 4096-byte `lightData` array directly into the network buffer. `SERIALIZED_SIZE` increased from 8192 to 12288 bytes (4KB blocks + 8KB lighting arrays).
+- Updated `Chunk.java` serialization. `getLightBytes()` and `setLightBytes()` now pack/unpack the 4096-byte `lightData` array directly into the network buffer. `SERIALIZED_SIZE` increased from 8192 to 12288 bytes (8KB blocks + 4KB packed light nibbles).
 - **The Server State Machine:** Re-architected `World.java` to use a 2-stage state machine to prevent "dark seams". 
   - **Stage 1:** Raw blocks are generated and placed into `generatedChunks`. The server waits for a 3x3x3 collar of raw chunks before submitting the center chunk to the background `LightEngine`.
   - **Stage 2:** Fully lit chunks are placed into `lightReady`. The server waits for a 3x3x3 collar of lit chunks before promoting the center chunk to `networkScheduled`.
@@ -1550,7 +1546,7 @@ Javadoc so any retrieved chunk carries its own dependency information.
 
 ---
 
-## Entry 057 — Client-Side Prediction (Zero-Latency Block Edits)
+## Entry 058 — Client-Side Prediction (Zero-Latency Block Edits)
 **Date:** 26.03.2026
 **Phase:** 6 — Foundation for extensibility (6C)
 
@@ -1572,6 +1568,86 @@ Javadoc so any retrieved chunk carries its own dependency information.
 
 ### NOTE FROM DEVELOPER (IMPORTANT):
 - Gemini violated many rules i used with Claude. It didn't add comments where it needed to, it didn't followed the `CLAUDE.md` properly and most likely broke some architectural constratint/rule/design or whatever. In short: It probably did something bad, but Claude wasn't working so i chose the easiest way out. My bad, noting this here so we can fix whatever headache this causes later.
+
+---
+
+## Entry 059 — Post-Gemini Cleanup & Roadmap Revision
+**Date:** 28.03.2026
+**Phase:** 6 — Meta / Documentation
+
+### What Was Done
+
+#### Documentation cleanup after Gemini's 6C-BFS implementation
+- Fixed Entry 056: corrected byte breakdown from "4KB blocks + 8KB lighting" to
+  "8KB blocks + 4KB packed light nibbles" (total 12,288 was correct, breakdown was wrong).
+- Resolved stale "Phase Roadmap Revision — BFS Before Modding" block — BFS was
+  completed inside 6C by Gemini, making the Phase 7 BFS plan obsolete.
+- Updated `copilot-instructions.md`: removed duplicate "Constraints given by gemini"
+  section, updated 6C description to reflect full BFS, corrected phase roadmap.
+- Updated `CLAUDE.md`: collapsed Phase 7 (BFS) into 6C done, slid Modding API from
+  Phase 8 → Phase 7, added Phase 8+ content roadmap, updated LightEngine package
+  description, updated Architecture Decision 6 (Light System) with full BFS details,
+  expanded Section 14 with new cross-file dependencies (World state machine, ClientWorld
+  mesh collar, processDirtyMeshes pipeline change).
+- Updated `README.md`: BFS checklist items moved under 6C as completed, Phase 7
+  becomes Modding API, removed old Phase 8.
+- Added Section 15 (Debugging Protocol) to CLAUDE.md — codifies escalation rules
+  for multi-file bugs to prevent the RAG thinking-loop problem that caused the
+  original BFS failure.
+- Created `.github/prompts/comment-gemini-files.prompt.md` — Copilot prompt for
+  adding missing comments to Gemini-authored code.
+
+#### Phase roadmap revision
+- **Phase 7** is now **Modding API** (was Phase 8). Prerequisites: 6D entity system
+  + 6E item/inventory system must be done first.
+- **Phase 8+** is now **Content & Polish**: non-solid blocks, transparent blocks,
+  caves, biomes, structures, advanced optimizations. These are feature-driven and
+  will be prioritized based on gameplay needs.
+- Advanced optimizations (palette compression, octree culling, occlusion queries)
+  explicitly deferred until measured bottlenecks exist. Current performance at
+  render distance 16 is adequate. These optimizations become valuable at render
+  distance 32+ with full verticality and caves — none of which exist yet.
+
+### Decisions Made
+- **Optimization timing:** Premature optimization rejected. The engine runs at
+  120+ FPS at current scale. Features (caves, structures, more block types) create
+  natural stress that reveals real bottlenecks. Optimizing before those features
+  exist risks wasted work if a feature (e.g. slabs) invalidates the optimization.
+  Specific deferrals: palette compression (useful at 30k+ chunks or 10+ players),
+  octree culling (useful at render distance 32+), hardware occlusion queries
+  (adds pipeline complexity for marginal gain at current scale).
+- **AI debugging escalation:** Formalized the "three-strike rule" — if Claude
+  cannot solve a multi-file bug in 3 attempts, it must explicitly escalate to
+  Claude Code, Copilot, or request method pastes. Prevents the token-burning
+  thinking loops that caused the BFS failure.
+- **Gemini code accepted as-is for now:** The BFS implementation works correctly.
+  Missing comments will be addressed via Copilot prompt. Architectural review found
+  no violations of core rules (GL thread safety, server headlessness). Minor items
+  (ConcurrentHashMap.newKeySet where HashSet would suffice, debug println telemetry)
+  are noted but not worth a refactor pass — they'll be cleaned up naturally when
+  those files are next touched for feature work.
+
+### AI Assistance Notes
+- Claude performed the full documentation audit, identified all inconsistencies,
+  and prepared all file updates.
+- Gemini's BFS implementation reviewed architecturally — found sound despite
+  documentation gaps.
+
+### Lessons / Observations
+- AI context limitations are a real engineering constraint, not just an inconvenience.
+  When a bug spans 4+ files with 300+ lines each, no current AI tool can reliably
+  hold all of them simultaneously. The correct response is structured escalation,
+  not repeated attempts with the same tool.
+- Documentation drift is the hidden cost of switching AI tools mid-phase. Gemini
+  did not follow the project's documentation conventions, creating stale references
+  and contradictions that compound over time. The fix took longer than expected
+  because every file cross-references every other file.
+- The "Phase Roadmap Revision" pattern (recording the reasoning for phase reordering)
+  proved valuable for understanding why things changed, even when the revision itself
+  became stale. Future revisions should include a "superseded by Entry XXX" note
+  when they're resolved.
+
+---
 
 ---
 

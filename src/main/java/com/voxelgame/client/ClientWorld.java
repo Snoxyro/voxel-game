@@ -132,6 +132,7 @@ public class ClientWorld implements BlockView {
     /** Carrier for a server-authoritative block change. Applied on the main thread. */
     private record PendingBlockChange(int worldX, int worldY, int worldZ, int blockId) {}
 
+    // Promotes a chunk into the meshing queue once its full 3x3x3 collar is present.
     private void promoteToMeshIfReady(ChunkPos pos) {
         if (!chunks.containsKey(pos) || meshScheduled.contains(pos)) return;
         if (canMesh(pos)) {
@@ -304,6 +305,7 @@ public class ClientWorld implements BlockView {
     // Internal pipeline steps — main thread only
     // -------------------------------------------------------------------------
 
+    // Applies queued remote-player spawn/move/despawn events on the GL thread.
     private void drainPendingPlayerEvents() {
         SpawnData spawn;
         while ((spawn = pendingSpawns.poll()) != null) {
@@ -327,6 +329,7 @@ public class ClientWorld implements BlockView {
         }
     }
 
+    // Applies server-authoritative block changes received on Netty threads.
     private void drainPendingBlockChanges() {
         PendingBlockChange change;
         while ((change = pendingBlockChanges.poll()) != null) {
@@ -335,6 +338,7 @@ public class ClientWorld implements BlockView {
         }
     }
 
+    // Stores arrived chunks, then tries to unlock meshing for the chunk and its neighborhood.
     private void drainPendingChunkData() {
         PendingChunkData pending;
         while ((pending = pendingChunkData.poll()) != null) {
@@ -352,6 +356,7 @@ public class ClientWorld implements BlockView {
         }
     }
 
+    // Unloads chunks and defers GPU mesh destruction in bounded batches per frame.
     private void drainPendingUnloads() {
         ChunkPos pos;
         while ((pos = pendingUnloads.poll()) != null) {
@@ -375,6 +380,7 @@ public class ClientWorld implements BlockView {
         }
     }
 
+    // Requires full 26-neighbor availability unless a neighbor is beyond vertical world limits.
     private boolean canMesh(ChunkPos pos) {
         for (int dx = -1; dx <= 1; dx++) {
             for (int dy = -1; dy <= 1; dy++) {
@@ -411,6 +417,7 @@ public class ClientWorld implements BlockView {
         }
     }
 
+    // Captures immutable neighbor snapshots and dispatches pure CPU meshing to workers.
     private void processDirtyMeshes() {
         List<ChunkPos> deferred = new ArrayList<>();
         
@@ -447,6 +454,7 @@ public class ClientWorld implements BlockView {
         }
     }
 
+    // Uploads completed mesh vertices to GPU on the GL thread.
     private void drainPendingMeshes() {
         int uploaded = 0;
         PendingMesh pending;
@@ -552,15 +560,14 @@ public class ClientWorld implements BlockView {
     // -------------------------------------------------------------------------
 
     /**
-     * Renders all visible chunk meshes with frustum culling.
-     * The shader must be bound and the texture array must be bound to unit 0 before calling.
+     * Renders all currently meshed chunks that pass frustum culling.
      *
-     * @param shader          the currently bound shader program
-     * @param projectionMatrix camera projection matrix
-     * @param viewMatrix       camera view matrix
-     * @return int[2] — [visible chunk count, total mesh count]
-    * @thread GL-main
-    * @gl-state shader=bound (required by caller)
+     * @param shader active world shader
+     * @param projectionMatrix projection matrix for the frame
+     * @param viewMatrix camera view matrix for the frame
+     * @return int[2] where index 0 = rendered chunk count, index 1 = total meshed chunks
+     * @thread GL-main
+     * @gl-state shader=bound (required by caller), issues Mesh draw calls
      */
     public int[] render(ShaderProgram shader, Matrix4f projectionMatrix, Matrix4f viewMatrix) {
         FrustumIntersection frustum = new FrustumIntersection(
@@ -588,12 +595,12 @@ public class ClientWorld implements BlockView {
      * {@code useTexture=false} before calling.
      *
      * @param shader the currently bound shader program
-         * @thread GL-main
-         * @gl-state shader=bound, useTexture=false
+     * @thread GL-main
+     * @gl-state shader=bound, useTexture=false
      */
     public void renderRemotePlayers(ShaderProgram shader) {
-            if (remotePlayerRenderer == null) return;
-            remotePlayerRenderer.render(shader, remotePlayers.values());
+        if (remotePlayerRenderer == null) return;
+        remotePlayerRenderer.render(shader, remotePlayers.values());
     }
 
     // -------------------------------------------------------------------------
@@ -643,11 +650,19 @@ public class ClientWorld implements BlockView {
     /**
      * Public endpoint for Client-Side Prediction. Instantly updates local memory,
      * recalculates light, and rebuilds the mesh without waiting for the server.
+     *
+     * @param worldX world-space block X
+     * @param worldY world-space block Y
+     * @param worldZ world-space block Z
+     * @param block target block type to apply locally
+     * @thread GL-main
+     * @gl-state may create/delete Mesh GPU resources synchronously
      */
     public void setBlock(int worldX, int worldY, int worldZ, BlockType block) {
         applyBlockChange(worldX, worldY, worldZ, block);
     }
 
+    // Core local mutation path used by both prediction and server-authoritative updates.
     private void applyBlockChange(int worldX, int worldY, int worldZ, BlockType block) {
         int cx = Math.floorDiv(worldX, Chunk.SIZE);
         int cy = Math.floorDiv(worldY, Chunk.SIZE);
@@ -720,22 +735,38 @@ public class ClientWorld implements BlockView {
     // Getters
     // -------------------------------------------------------------------------
 
-    /** @return spawn X received from server, or 64.0 if not yet received */
+    /**
+     * Returns the latest spawn X received from the server.
+     *
+     * @return spawn X, or default 64.0 if not yet received
+     * @thread any
+     */
     public float getSpawnX() { return spawnX; }
 
-    /** @return spawn Y received from server, or 70.0 if not yet received */
+    /**
+     * Returns the latest spawn Y received from the server.
+     *
+     * @return spawn Y, or default 70.0 if not yet received
+     * @thread any
+     */
     public float getSpawnY() { return spawnY; }
 
-    /** @return spawn Z received from server, or 64.0 if not yet received */
+    /**
+     * Returns the latest spawn Z received from the server.
+     *
+     * @return spawn Z, or default 64.0 if not yet received
+     * @thread any
+     */
     public float getSpawnZ() { return spawnZ; }
 
-    // Helper method to keep both collections in sync
+    // Keeps the dedupe set and priority queue in sync for dirty mesh scheduling.
     private void enqueueDirtyMesh(ChunkPos pos) {
         if (dirtyMeshesSet.add(pos)) {
             dirtyMeshesQueue.add(pos);
         }
     }
 
+    // Orders worker tasks by chunk arrival ticket to stabilize visible pop-in ordering.
     private static class PriorityTask implements Runnable, Comparable<PriorityTask> {
         final long ticket;
         final Runnable action;
